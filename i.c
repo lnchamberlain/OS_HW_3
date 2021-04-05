@@ -261,25 +261,25 @@ typedef struct file_t{
   offset start_of_file;
 }file_t;
 
-struct timestamp{
-  time_t time;
-}
 //General node type
-typedef struct node{
-  //Perhaps we could do something like 0 for directory and 1 for file? We should we do a string an do strcomp?
-  int type;
+typedef struct tree_node{
+  int type; //1 for directories, 2 for files
   char name[256];
-  //For accessed and modified times
-  struct timestamp timestamps[2];
-  union{
-    file_t file;
-    dir_t directory;
-  } value;
-}node;
+  uint32_t uid, gid; //User and group ID's
+  int nlinks; //Number of links to node
+  offset parent;
+  offset *children; //Change to offset? How do we do an pointer to a pointer in offsets?
+  int numChildren;
+  offset startOfData;
+  size_t size;
+  struct timespec st_atim; //timespec is defined in time.h, access time
+  struct timespec st_mtim; //modified time
+  struct timespec st_ctim; //status change time
+}tree_node; 
 
 #define MAX_NAME_LENGTH (256)
 #define MAX_PATH_LENGTH (8192)
-#define USED_INDICATOR = ((uint32_t) (UINT32_C(0xdeadbeef)))
+#define USED_INDICATOR ((uint32_t) (UINT32_C(0xdeadbeef)))
 /* YOUR HELPER FUNCTIONS GO HERE */
 
 //Converts an offset to a pointer
@@ -306,7 +306,7 @@ offset ptr_to_offset(void* fs_start, void * ptr){
 handle_t get_handle(void *ptr, size_t size){
   handle_t h;
   size_t s;
-  memory_block_t *block;
+  memory_block *block;
   //cast pointer to a handle
   h = (handle_t) ptr;
   //See if has been initialized
@@ -324,18 +324,54 @@ handle_t get_handle(void *ptr, size_t size){
     return h;
 }
     
-
-
-
-
-
-
-
-
-
 /*END MEMORY FUNCTIONS */
     
-    
+/*BEGIN TREE FUNCTIONS */
+//create tree is defined as a init function so we can check if the filesystem has been unmounted, and if so then root does not need to be created
+void create_tree(){
+  tree_node* root = (tree_node*)malloc(sizeof(tree_node)); //TODO Change to use our implementation of malloc
+  root->type = 2; //2 is for directories
+  root->name = "/";
+  root->nlinks = 2; // nlinks is 2 for directories, 1 for files
+  root->parent = NULL;
+  root->data = NULL;
+  root->size = 0;
+  root->numChildren = 0;
+}
+
+tree_node find_node(const char *path, tree_node *curr, int lastIndex){
+  int i, j, oldnameLen, nameLen;
+  char* subPath = NULL;
+  if(path[lastIndex] != "/"){
+    return NULL;
+  }
+  
+  //Account for leading '/'
+  nameLen = 1 + lastIndex;
+  oldnameLen = nameLen;
+  while(path[nameLen] != "/"){
+    nameLen++;
+  }
+  //set subpath equal to slice of path 
+  subPath = (char *)malloc((nameLen - oldnameLen) * sizeof(char));
+  for(i = 1, j = 0; i <= nameLen; i++, j++){
+    subPath[j] = path[i];
+  }
+  //Check if node was found
+  if(strcmp((curr->name), subPath) != 0){
+    return curr;
+  }
+  //Found name of the next path step
+  //Search current's children for that slice
+  for(i = 0; i < curr->links; i++){
+    if(strcmp((curr->children)[i]->name, subPath) != 0){
+      //Found in children, recurse using new information
+      curr = curr->children[i];
+      find_node(path, curr, nameLen);
+    }
+    //If reached end of loop and none are equal, bad path, return NULL
+    return NULL;
+/*END TREE FUNCTIONS */
 
 /*
 
@@ -604,9 +640,33 @@ handle_t get_handle(void *ptr, size_t size){
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
                           uid_t uid, gid_t gid,
                           const char *path, struct stat *stbuf) {
-  /* STUB */
-  return -1;
+  //Account for more errors here
+  tree_node* found = find_node(path);
+  //STUB
+  if(!found){
+    errnoptr = ENOENT;
+    return -1;
+  }
+  else{
+    //Found file or dir, populate stbuf with info provided
+  stbuf->st_uid = uid;
+  stbuf->st_gid = gid;
+  stbuf->st_atim = (found->st_atim).tv_sec;
+  stbuf->st_mtim = (found->st_mtim).tv_sec;
+  //If type is 1, found file. Fill in size
+  if(found->type == 1){
+    stbuf->mode = S_IFREG | 0755;
+    stbuf->st_nlink = 1 + found->links;
+    stbuf->st_size = found->size;
+  }
+  else{
+    stbuf->mode = S_IFDIR | 0755;
+    stbuf->st_nlink = 2 + found->links;
+      }
+  }
+  return 0;
 }
+  /* STUB */
 
 /* Implements an emulation of the readdir system call on the filesystem 
    of size fssize pointed to by fsptr. 
