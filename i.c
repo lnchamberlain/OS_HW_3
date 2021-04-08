@@ -280,6 +280,7 @@ typedef struct tree_node{
 #define MAX_NAME_LENGTH (256)
 #define MAX_PATH_LENGTH (8192)
 #define USED_INDICATOR ((uint32_t) (UINT32_C(0xdeadbeef)))
+#define PAGE_SIZE (4096)
 /* YOUR HELPER FUNCTIONS GO HERE */
 
 //Converts an offset to a pointer
@@ -288,7 +289,7 @@ void * offset_to_ptr(void *fs_start, offset off){
     return NULL;
   }
   else{
-    return fs_start + off;
+    return (void*)(fs_start + off);
   }
 }
 //converts a pointer to an offset
@@ -371,6 +372,8 @@ tree_node find_node(const char *path, tree_node *curr, int lastIndex){
     }
     //If reached end of loop and none are equal, bad path, return NULL
     return NULL;
+  }
+}
 /*END TREE FUNCTIONS */
 
 /*
@@ -641,7 +644,8 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
                           uid_t uid, gid_t gid,
                           const char *path, struct stat *stbuf) {
   //Account for more errors here
-  tree_node* found = find_node(path);
+  //TODO find a way to get root here
+  tree_node* found = find_node(path, root, 0);
   //STUB
   if(!found){
     errnoptr = ENOENT;
@@ -706,6 +710,8 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr) {
+
+
   /* STUB */
   return -1;
 }
@@ -729,6 +735,30 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
+
+  int i, path_length, file_index, parent_index;
+  for(i=0; path[i] != NULL; i++){
+  }
+  path_length = i - 1;
+  for(i = path_length; path[i] != "/"; i--){
+  }
+  file_index = i;
+  for(i = file_index; path[i] != "/"; i--){
+  }
+  char newPath[path_length - file_index] = strcpy(path, newPath);
+  tree_node parent = find_node(newPath, root, 0);
+  if(parent == NULL){
+    //TODO set errno for bad path
+  }
+  char file_name = (char*)malloc(path_length - file_index);
+  strcpy(file_name, path[file_index]);
+  newNode = (tree_node)malloc(sizeof(tree_node));
+  newNode->parent = parent;
+  newNode->size = (size_t) 0;
+  newNode->type = 1;
+  newNode->name = 
+  parent_index = i;
+  
   /* STUB */
   return -1;
 }
