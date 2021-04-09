@@ -339,8 +339,8 @@ void create_tree(){
   root->size = 0;
   root->numChildren = 0;
 }
-
-tree_node find_node(const char *path, tree_node *curr, int lastIndex){
+tree_node* getParent(void *fsstart, const char *path);
+tree_node* find_node(const char *path, tree_node *curr, int lastIndex){
   int i, j, oldnameLen, nameLen;
   char* subPath = NULL;
   if(path[lastIndex] != "/"){
@@ -373,6 +373,40 @@ tree_node find_node(const char *path, tree_node *curr, int lastIndex){
     //If reached end of loop and none are equal, bad path, return NULL
     return NULL;
   }
+}
+tree_node* getParent(void*fsstart, const char *path){
+  tree_node* parent_node = NULL;
+  tree_node* root = (tree_node*) fsstart;
+  int i, newEndIndex;
+  //Find the length of the path without the last node
+  for(i = strlen(path) - 1; path[i] != "/"; i--){}
+  int newLength = strlen(path) - i + 1;
+  char *subPath = (char*) malloc(sizeof(char) * newLength);
+  for(i = 0; i < newLength; i++){
+    newPath[i] = path[i];
+  }
+  parent_node = find_node(subpath, root, 0);
+  return parent_node
+    }
+
+int add_tree_node(tree_node* node, const char *path, void *fsstart){
+  //Pass around the start of the filessystem to avoid global variables
+  root = (tree_node*)(fsstart);
+  tree_node *parent_node = getParent(fsstart, path);
+  //If parent is null then path was bad
+  if(parent_node == NULL){
+    return -1;
+  }
+  //Adding a child to parent
+  parent_node->numChildren += 1;
+  //Account for the new child added
+  parent_node->children = realloc(curr-children, sizeof(tree_node *) * parent->numChildren);
+  //Create space for child to be added
+  parent_node->children[parent_node->numChildren - 1] = (tree_node *)malloc(sizeof(tree_node));
+  //Make node a child of parent node
+  parent_node->children[parent_node->numChildren -1] = node;
+
+  return 0;
 }
 /*END TREE FUNCTIONS */
 
@@ -736,31 +770,34 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
 
-  int i, path_length, file_index, parent_index;
-  for(i=0; path[i] != NULL; i++){
+  int i, path_length, file_index, file_length;
+  tree_node *parent_node = NULL;
+  parent_node = getParent(fsptr, path);
+  if(parent_node == NULL){
+    //TODO FIND ERROR MESSAGE TO GO HERE FOR BAD PATH
+    //errnoptr = EFAULT ?
+    return -1;
   }
-  path_length = i - 1;
+  path_length = strlen(path) - 1;
   for(i = path_length; path[i] != "/"; i--){
   }
   file_index = i;
-  for(i = file_index; path[i] != "/"; i--){
-  }
-  char newPath[path_length - file_index] = strcpy(path, newPath);
-  tree_node parent = find_node(newPath, root, 0);
-  if(parent == NULL){
-    //TODO set errno for bad path
-  }
-  char file_name = (char*)malloc(path_length - file_index);
-  strcpy(file_name, path[file_index]);
-  newNode = (tree_node)malloc(sizeof(tree_node));
-  newNode->parent = parent;
+  file_length = path_length - file_index + 1;
+  
+  char* fileName = (char*)malloc(sizeof(char) * (file_length));
+  fileName[file_length] = "\0";
+  for(i = path_length; i > file_index; i--)
+    fileName[i] = path[i];
+  tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
+  newNode->name = fileName;
+  newNode->parent = parent_node;
   newNode->size = (size_t) 0;
   newNode->type = 1;
-  newNode->name = 
-  parent_index = i;
-  
-  /* STUB */
-  return -1;
+  success = add_node(newNode, path, fsptr);
+  if(!success){return -1;}
+  else{
+    return 0;
+  }
 }
 
 /* Implements an emulation of the unlink system call for regular files
