@@ -235,11 +235,11 @@
 typedef size_t offset;
 
 //Type memory_block stores the used size and total size as well as an offset to the next node. 
-typedef struct memory_block{
+typedef struct memory_block*{
   size_t size;
   size_t user_size;
   offset next;
-}memory_block;
+}memory_block*;
 
 //Type handle checks if fs has been booted before using used_indicator, stores an offset to free memory and the root, as well as it's respective size. 
 typedef struct handle_t{
@@ -282,7 +282,21 @@ typedef struct tree_node{
 #define USED_INDICATOR ((uint32_t) (UINT32_C(0xdeadbeef)))
 #define PAGE_SIZE (4096)
 /* YOUR HELPER FUNCTIONS GO HERE */
-
+//Function to set the current time
+static void time_stamp(tree_node* node, int modify_flag){
+  int fail;
+  struct timespec time;
+  if(node == NULL){
+    return;
+  }
+  success = clock_gettime(CLOCK_REALTIME, &time);
+  if(!fail){
+    node->st_atim = time;
+    if(modify_flag){
+      node->st+mtim = time;
+    }
+  }
+}
 //Converts an offset to a pointer
 void * offset_to_ptr(void *fs_start, offset off){
   if(off == ((off_t) 0)){
@@ -304,7 +318,7 @@ offset ptr_to_offset(void* fs_start, void * ptr){
 }
 
 /*BEGIN MEMORY FUNCTIONS, COPIED FROM HW2 and changed to work with handles rather than pointers*/
-handle_t get_handle(void *ptr, size_t size){
+static handle_t get_handle(void *ptr, size_t size){
   handle_t h;
   size_t s;
   memory_block *block;
@@ -324,6 +338,56 @@ handle_t get_handle(void *ptr, size_t size){
     h->root = (offset) 0;
     return h;
 }
+//Returns the largest block size
+static size_t largest_free_block(handle_t h){
+  size_t largest, without_header;
+  memory_block *curr;
+  void *temp;
+  //Handle error checking
+  if(h == NULL){
+    return NULL;
+  }
+  if(h->size == (size_t) 0){
+    return ((size_t) 0);
+  }
+  temp = offset_to_ptr(h, h->size);
+  curr = (memory_block *) temp;
+  while(curr != NULL){
+    if(curr->size > largest){
+      largest = curr->size;
+    }
+    temp = offset_to_ptr(h, curr->next);
+    curr = (memory_block *) temp;
+  }
+  if(size < sizeof(memory_block)){
+    return ((size_t) 0);
+  }
+  without_header = size - sizeof(memory_block);
+  return without_header;
+}
+//Very similar to above, but computes a total rather than a max
+static size_t total_free_space(handle h){
+  size_t total;
+  void * temp;
+  memory_block * curr;
+  if(h == NULL){
+    return NULL;
+  }
+  if(h->size =(size_t) 0){
+    return (size_t) 0;
+  }
+  temp = offset_to_ptr(h, h->size);
+  curr = (memory_block*) temp;
+  while(curr != NULL){
+    //Discount all headers
+    total += (curr->size - sizeof(memory_block));
+    temp = offset_to_ptr(h, curr->next);
+    curr = (memory_block*) temp;
+  }
+  return total;
+}
+
+
     
 /*END MEMORY FUNCTIONS */
     
@@ -677,6 +741,11 @@ int add_tree_node(tree_node* node, const char *path, void *fsstart){
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
                           uid_t uid, gid_t gid,
                           const char *path, struct stat *stbuf) {
+  handle_t h = get_handle(fsptr);
+  if(h == NULL){
+    return NULL;
+  }
+  tree_node * root = (tree_node*) h->root;
   //Account for more errors here
   //TODO find a way to get root here
   tree_node* found = find_node(path, root, 0);
@@ -744,10 +813,27 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr) {
-
-
-  /* STUB */
-  return -1;
+  tree_node *dir;
+  int numChildren;
+  handle_t h = get_handle(fsptr);
+  if(h == NULL){
+    //TODO FIND THE ERROR CODE HERE
+    return -1;
+  }
+  dir = find_node(path, (tree_node*) h->root, 0);
+  if(dir->type != 2){
+    //TODO FIND ERROR CODE FOR NOT DIR
+    return -1;
+  }
+  if(dir->numChildren == 0){
+    return 0;
+  }
+  namesptr = (char*)malloc((dir->numChildren) * sizeof(void *));
+  for(int i = 0; i < dir->numChildren; i++){
+    *namesptr = (char*)calloc(strlen(dir->children[i]));
+    strcpy(dir->children[i], *namesptr[i]);
+   }
+  return dir->numChildren;
 }
 
 /* Implements an emulation of the mknod system call for regular files
