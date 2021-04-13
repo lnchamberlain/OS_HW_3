@@ -950,7 +950,10 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
   /* STUB */
-  
+  handle_t h = get_handle(fsptr, fssize);
+  tree_node* root = h->root;
+  tree_node* node = find_node(path, root, 0);
+  remove_tree_node(node);
   return -1;
 }
 
