@@ -235,11 +235,11 @@
 typedef size_t offset;
 
 //Type memory_block stores the used size and total size as well as an offset to the next node. 
-typedef struct memory_block*{
+typedef struct memory_block{
   size_t size;
-  size_t user_size;
+  size_t total_size;
   offset next;
-}memory_block*;
+}memory_block;
 
 //Type handle checks if fs has been booted before using used_indicator, stores an offset to free memory and the root, as well as it's respective size. 
 typedef struct handle_t{
@@ -268,10 +268,10 @@ typedef struct tree_node{
   uint32_t uid, gid; //User and group ID's
   int nlinks; //Number of links to node
   offset parent;
-  offset *children; //Change to offset? How do we do an pointer to a pointer in offsets?
+  char **children; //only applies for directories, same with numChildren
   int numChildren;
   offset startOfData;
-  size_t size;
+  size_t size; // only applies for files
   struct timespec st_atim; //timespec is defined in time.h, access time
   struct timespec st_mtim; //modified time
   struct timespec st_ctim; //status change time
@@ -289,11 +289,11 @@ static void time_stamp(tree_node* node, int modify_flag){
   if(node == NULL){
     return;
   }
-  success = clock_gettime(CLOCK_REALTIME, &time);
+  fail = clock_gettime(CLOCK_REALTIME, &time);
   if(!fail){
     node->st_atim = time;
     if(modify_flag){
-      node->st+mtim = time;
+      node->st_mtim = time;
     }
   }
 }
@@ -318,12 +318,12 @@ offset ptr_to_offset(void* fs_start, void * ptr){
 }
 
 /*BEGIN MEMORY FUNCTIONS, COPIED FROM HW2 and changed to work with handles rather than pointers*/
-static handle_t get_handle(void *ptr, size_t size){
-  handle_t h;
+static handle_t* get_handle(void *ptr, size_t size){
+  handle_t* h;
   size_t s;
   memory_block *block;
   //cast pointer to a handle
-  h = (handle_t) ptr;
+  h = (handle_t*) ptr;
   //See if has been initialized
   if(h->used_indicator != USED_INDICATOR){
     //If not, account for size of handle header
@@ -339,7 +339,7 @@ static handle_t get_handle(void *ptr, size_t size){
     return h;
 }
 //Returns the largest block size
-static size_t largest_free_block(handle_t h){
+static size_t largest_free_block(handle_t* h){
   size_t largest, without_header;
   memory_block *curr;
   void *temp;
@@ -359,14 +359,14 @@ static size_t largest_free_block(handle_t h){
     temp = offset_to_ptr(h, curr->next);
     curr = (memory_block *) temp;
   }
-  if(size < sizeof(memory_block)){
+  if(largest < sizeof(memory_block)){
     return ((size_t) 0);
   }
-  without_header = size - sizeof(memory_block);
+  without_header = largest - sizeof(memory_block);
   return without_header;
 }
 //Very similar to above, but computes a total rather than a max
-static size_t total_free_space(handle h){
+static size_t total_free_space(handle_t* h){
   size_t total;
   void * temp;
   memory_block * curr;
@@ -387,12 +387,44 @@ static size_t total_free_space(handle h){
   return total;
 }
 
+static offset malloc_impl(handle_t *h, size_t size){
+  size_t newSize;
+  memory_block* block;
+  offset result;
+  void * free_space_ptr;
+  if(h == NULL){
+    return (offset) 0;
+  }
+  if(size == (size_t)0){
+    return (offset) 0;
+  }
+  newSize = size + sizeof(memory_block);
+  //Account for overflow
+  if(newSize < 0){
+    return (offset)0;
+  }
+  block = get_memory(h, newSize);
+  if(block == NULL){
+    return (offset) 0;
+  }
+  free_space_ptr = ((void *) block) + sizeof(memory_block);
+  block->total_size = size;
+  
+  result = offset_to_ptr(h, free_space_ptr);
+  if(result){
+    return result;
+  }
+  else{
+    return (offset) 0;
+  }
+}
 
     
 /*END MEMORY FUNCTIONS */
     
 /*BEGIN TREE FUNCTIONS */
 //create tree is defined as a init function so we can check if the filesystem has been unmounted, and if so then root does not need to be created
+/*
 void create_tree(){
   tree_node* root = (tree_node*)malloc(sizeof(tree_node)); //TODO Change to use our implementation of malloc
   root->type = 2; //2 is for directories
@@ -403,7 +435,8 @@ void create_tree(){
   root->size = 0;
   root->numChildren = 0;
 }
-tree_node* getParent(void *fsstart, const char *path);
+*/
+tree_node* getParent(handle_t *h, const char *path);
 tree_node* find_node(const char *path, tree_node *curr, int lastIndex){
   int i, j, oldnameLen, nameLen;
   char* subPath = NULL;
@@ -428,8 +461,9 @@ tree_node* find_node(const char *path, tree_node *curr, int lastIndex){
   }
   //Found name of the next path step
   //Search current's children for that slice
-  for(i = 0; i < curr->links; i++){
-    if(strcmp((curr->children)[i]->name, subPath) != 0){
+  for(i = 0; i < curr->numChildren; i++){
+    //LAST ERROR HERE
+    if(strcmp(((curr->children[i]->name), subPath)) != 0){
       //Found in children, recurse using new information
       curr = curr->children[i];
       find_node(path, curr, nameLen);
@@ -438,25 +472,25 @@ tree_node* find_node(const char *path, tree_node *curr, int lastIndex){
     return NULL;
   }
 }
-tree_node* getParent(void*fsstart, const char *path){
+tree_node* getParent(handle_t*h, const char *path){
   tree_node* parent_node = NULL;
-  tree_node* root = (tree_node*) fsstart;
-  int i, newEndIndex;
+  tree_node* root = (tree_node *) h->root;
+  int i;
   //Find the length of the path without the last node
   for(i = strlen(path) - 1; path[i] != "/"; i--){}
   int newLength = strlen(path) - i + 1;
   char *subPath = (char*) malloc(sizeof(char) * newLength);
   for(i = 0; i < newLength; i++){
-    newPath[i] = path[i];
+    subPath[i] = path[i];
   }
-  parent_node = find_node(subpath, root, 0);
-  return parent_node
+  parent_node = find_node(subPath, root, 0);
+  return parent_node;
     }
 
-int add_tree_node(tree_node* node, const char *path, void *fsstart){
+int add_tree_node(tree_node* node, const char *path, handle_t *h){
   //Pass around the start of the filessystem to avoid global variables
-  root = (tree_node*)(fsstart);
-  tree_node *parent_node = getParent(fsstart, path);
+  tree_node *root = (tree_node*)h->root;
+  tree_node *parent_node = getParent(h, path);
   //If parent is null then path was bad
   if(parent_node == NULL){
     return -1;
@@ -464,7 +498,7 @@ int add_tree_node(tree_node* node, const char *path, void *fsstart){
   //Adding a child to parent
   parent_node->numChildren += 1;
   //Account for the new child added
-  parent_node->children = realloc(curr-children, sizeof(tree_node *) * parent->numChildren);
+  parent_node->children = realloc(parent_node->children, sizeof(tree_node *) * parent_node->numChildren);
   //Create space for child to be added
   parent_node->children[parent_node->numChildren - 1] = (tree_node *)malloc(sizeof(tree_node));
   //Make node a child of parent node
@@ -741,7 +775,7 @@ int add_tree_node(tree_node* node, const char *path, void *fsstart){
 int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
                           uid_t uid, gid_t gid,
                           const char *path, struct stat *stbuf) {
-  handle_t h = get_handle(fsptr);
+  handle_t* h = get_handle(fsptr, fssize);
   if(h == NULL){
     return NULL;
   }
@@ -758,17 +792,17 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
     //Found file or dir, populate stbuf with info provided
   stbuf->st_uid = uid;
   stbuf->st_gid = gid;
-  stbuf->st_atim = (found->st_atim).tv_sec;
-  stbuf->st_mtim = (found->st_mtim).tv_sec;
+  stbuf->st_atim = (found->st_atim);
+  stbuf->st_mtim = (found->st_mtim);
   //If type is 1, found file. Fill in size
   if(found->type == 1){
-    stbuf->mode = S_IFREG | 0755;
-    stbuf->st_nlink = 1 + found->links;
+    stbuf->st_mode = S_IFREG | 0755;
+    stbuf->st_nlink = 1 + found->nlinks;
     stbuf->st_size = found->size;
   }
   else{
-    stbuf->mode = S_IFDIR | 0755;
-    stbuf->st_nlink = 2 + found->links;
+    stbuf->st_mode = S_IFDIR | 0755;
+    stbuf->st_nlink = 2 + found->nlinks;
       }
   }
   return 0;
@@ -815,7 +849,7 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr) {
   tree_node *dir;
   int numChildren;
-  handle_t h = get_handle(fsptr);
+  handle_t* h = get_handle(fsptr, fssize);
   if(h == NULL){
     //TODO FIND THE ERROR CODE HERE
     return -1;
@@ -830,7 +864,7 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   }
   namesptr = (char*)malloc((dir->numChildren) * sizeof(void *));
   for(int i = 0; i < dir->numChildren; i++){
-    *namesptr = (char*)calloc(strlen(dir->children[i]));
+    *namesptr = (char*)calloc(sizeof(char), strlen(dir->children[i]));
     strcpy(dir->children[i], *namesptr[i]);
    }
   return dir->numChildren;
@@ -875,14 +909,14 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
   for(i = path_length; i > file_index; i--)
     fileName[i] = path[i];
   tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
-  newNode->name = fileName;
+  *newNode->name = fileName;
   newNode->parent = parent_node;
   newNode->size = (size_t) 0;
   newNode->type = 1;
-  success = add_node(newNode, path, fsptr);
-  if(!success){return -1;}
+  int fail = add_node(newNode, path, fsptr);
+  if(!fail){return 0;}
   else{
-    return 0;
+    return -1;
   }
 }
 
@@ -1113,327 +1147,3 @@ int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr,
 
 
 
-
-
-/* End of helper functions */
-
-/* Implements an emulation of the stat system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-   
-   If path can be followed and describes a file or directory 
-   that exists and is accessable, the access information is 
-   put into stbuf. 
-
-   On success, 0 is returned. On failure, -1 is returned and 
-   the appropriate error code is put into *errnoptr.
-
-   man 2 stat documents all possible error codes and gives more detail
-   on what fields of stbuf need to be filled in. Essentially, only the
-   following fields need to be supported:
-
-   st_uid      the value passed in argument
-   st_gid      the value passed in argument
-   st_mode     (as fixed values S_IFDIR | 0755 for directories,
-                                S_IFREG | 0755 for files)
-   st_nlink    (as many as there are subdirectories (not files) for directories
-                (including . and ..),
-                1 for files)
-   st_size     (supported only for files, where it is the real file size)
-   st_atim
-   st_mtim
-
-*/
-int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
-                          uid_t uid, gid_t gid,
-                          const char *path, struct stat *stbuf) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the readdir system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   If path can be followed and describes a directory that exists and
-   is accessable, the names of the subdirectories and files 
-   contained in that directory are output into *namesptr. The . and ..
-   directories must not be included in that listing.
-
-   If it needs to output file and subdirectory names, the function
-   starts by allocating (with calloc) an array of pointers to
-   characters of the right size (n entries for n names). Sets
-   *namesptr to that pointer. It then goes over all entries
-   in that array and allocates, for each of them an array of
-   characters of the right size (to hold the i-th name, together 
-   with the appropriate '\0' terminator). It puts the pointer
-   into that i-th array entry and fills the allocated array
-   of characters with the appropriate name. The calling function
-   will call free on each of the entries of *namesptr and 
-   on *namesptr.
-
-   The function returns the number of names that have been 
-   put into namesptr. 
-
-   If no name needs to be reported because the directory does
-   not contain any file or subdirectory besides . and .., 0 is 
-   returned and no allocation takes place.
-
-   On failure, -1 is returned and the *errnoptr is set to 
-   the appropriate error code. 
-
-   The error codes are documented in man 2 readdir.
-
-   In the case memory allocation with malloc/calloc fails, failure is
-   indicated by returning -1 and setting *errnoptr to EINVAL.
-
-*/
-int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
-                          const char *path, char ***namesptr) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the mknod system call for regular files
-   on the filesystem of size fssize pointed to by fsptr.
-
-   This function is called only for the creation of regular files.
-
-   If a file gets created, it is of size zero and has default
-   ownership and mode bits.
-
-   The call creates the file indicated by path.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 mknod.
-
-*/
-int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the unlink system call for regular files
-   on the filesystem of size fssize pointed to by fsptr.
-
-   This function is called only for the deletion of regular files.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 unlink.
-
-*/
-int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the rmdir system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   The call deletes the directory indicated by path.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The function call must fail when the directory indicated by path is
-   not empty (if there are files or subdirectories other than . and ..).
-
-   The error codes are documented in man 2 rmdir.
-
-*/
-int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the mkdir system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   The call creates the directory indicated by path.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 mkdir.
-
-*/
-int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the rename system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   The call moves the file or directory indicated by from to to.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   Caution: the function does more than what is hinted to by its name.
-   In cases the from and to paths differ, the file is moved out of 
-   the from path and added to the to path.
-
-   The error codes are documented in man 2 rename.
-
-*/
-int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
-                         const char *from, const char *to) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the truncate system call on the filesystem 
-   of size fssize pointed to by fsptr. 
-
-   The call changes the size of the file indicated by path to offset
-   bytes.
-
-   When the file becomes smaller due to the call, the extending bytes are
-   removed. When it becomes larger, zeros are appended.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 truncate.
-
-*/
-int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
-                           const char *path, off_t offset) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the open system call on the filesystem 
-   of size fssize pointed to by fsptr, without actually performing the opening
-   of the file (no file descriptor is returned).
-
-   The call just checks if the file (or directory) indicated by path
-   can be accessed, i.e. if the path can be followed to an existing
-   object for which the access rights are granted.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The two only interesting error codes are 
-
-   * EFAULT: the filesystem is in a bad state, we can't do anything
-
-   * ENOENT: the file that we are supposed to open doesn't exist (or a
-             subpath).
-
-   It is possible to restrict ourselves to only these two error
-   conditions. It is also possible to implement more detailed error
-   condition answers.
-
-   The error codes are documented in man 2 open.
-
-*/
-int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
-                       const char *path) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the read system call on the filesystem 
-   of size fssize pointed to by fsptr.
-
-   The call copies up to size bytes from the file indicated by 
-   path into the buffer, starting to read at offset. See the man page
-   for read for the details when offset is beyond the end of the file etc.
-   
-   On success, the appropriate number of bytes read into the buffer is
-   returned. The value zero is returned on an end-of-file condition.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 read.
-
-*/
-int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
-                       const char *path, char *buf, size_t size, off_t offset) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the write system call on the filesystem 
-   of size fssize pointed to by fsptr.
-
-   The call copies up to size bytes to the file indicated by 
-   path into the buffer, starting to write at offset. See the man page
-   for write for the details when offset is beyond the end of the file etc.
-   
-   On success, the appropriate number of bytes written into the file is
-   returned. The value zero is returned on an end-of-file condition.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 write.
-
-*/
-int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr,
-                        const char *path, const char *buf, size_t size, off_t offset) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the utimensat system call on the filesystem 
-   of size fssize pointed to by fsptr.
-
-   The call changes the access and modification times of the file
-   or directory indicated by path to the values in ts.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 utimensat.
-
-*/
-int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
-                          const char *path, const struct timespec ts[2]) {
-  /* STUB */
-  return -1;
-}
-
-/* Implements an emulation of the statfs system call on the filesystem 
-   of size fssize pointed to by fsptr.
-
-   The call gets information of the filesystem usage and puts in 
-   into stbuf.
-
-   On success, 0 is returned.
-
-   On failure, -1 is returned and *errnoptr is set appropriately.
-
-   The error codes are documented in man 2 statfs.
-
-   Essentially, only the following fields of struct statvfs need to be
-   supported:
-
-   f_bsize   fill with what you call a block (typically 1024 bytes)
-   f_blocks  fill with the total number of blocks in the filesystem
-   f_bfree   fill with the free number of blocks in the filesystem
-   f_bavail  fill with same value as f_bfree
-   f_namemax fill with your maximum file/directory name, if your
-             filesystem has such a maximum
-
-*/
-int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr,
-                         struct statvfs* stbuf) {
-  /* STUB */
-  return -1;
-}
