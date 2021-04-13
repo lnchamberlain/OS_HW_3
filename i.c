@@ -506,6 +506,21 @@ int add_tree_node(tree_node* node, const char *path, handle_t *h){
 
   return 0;
 }
+
+int remove_tree_node(tree_node* node, const char *path, handle_t *h) {
+	tree_node *parent_node = getParent(h, path);
+	
+	if (parent_node == NULL) {
+		return -1;
+	}
+	
+	// Basically the same as add with changes for removal
+	parent_node->numChildren -= 1;
+	parent_node->children = realloc(parent_node->children, sizeof(tree_node *) * parent->numChildren);
+	parent_node->children[parent_node->numChildren - 1] = (tree_node *)free(sizeof(tree_node));
+	
+	return 0;
+}
 /*END TREE FUNCTIONS */
 
 /*
@@ -935,6 +950,7 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
   /* STUB */
+  
   return -1;
 }
 
