@@ -507,7 +507,7 @@ int add_tree_node(tree_node* node, const char *path, handle_t *h){
   return 0;
 }
 
-int remove_tree_node(tree_node* node, const char *path, handle_t *h) {
+int remove_tree_node(tree_node* node) {
 	tree_node *parent_node = getParent(h, path);
 	
 	if (parent_node == NULL) {
