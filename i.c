@@ -951,17 +951,23 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
   if (path == NULL) {
 	  // ENOENT if path is empty
-	  errnoptr = ENOENT;
+	  *errnoptr = ENOENT;
 	  return -1
   }
   handle_t h = get_handle(fsptr, fssize);
+  
+  if (h == NULL) {
+	  *errnoptr = EFAULT;
+	  return -1;
+  }
+  
   tree_node* root = h->root;
   tree_node* node = find_node(path, root, 0);
   if (remove_tree_node(node) == -1) {
 	  // ENOTDIR is listed when a directory is not found,
 	  // which seems appropriate considering remove
 	  // returns -1 when the parent is not found.
-	  errnoptr = ENOTDIR;
+	  *errnoptr = ENOTDIR;
 	  return -1;
   }
   return 0;
@@ -985,18 +991,24 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
   handle_t h = get_handle(fsptr, fssize);
+  
+  if (h == NULL) {
+	  *errnoptr = EFAULT;
+	  return -1;
+  }
+  
   tree_node* root = h->root;
   tree_node* node = find_node(node);
   
   // fail if directory is not found
   if (node == NULL) {
-	  errnoptr = ENOENT;
+	  *errnoptr = ENOENT;
 	  return -1;
   }
   
   // check if the directory is not empty, failing if it is
   if (node->numChildren > 0) {
-	  errnoptr = ENOTEMPTY;
+	  *errnoptr = ENOTEMPTY;
 	  return -1;
   }
   
