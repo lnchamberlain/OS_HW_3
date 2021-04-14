@@ -260,7 +260,7 @@ typedef struct file_t{
   size_t size;
   offset start_of_file;
 }file_t;
-
+typedef struct tree_node tree_node;
 //General node type
 typedef struct tree_node{
   int type; //1 for directories, 2 for files
@@ -268,7 +268,7 @@ typedef struct tree_node{
   uint32_t uid, gid; //User and group ID's
   int nlinks; //Number of links to node
   offset parent;
-  char **children; //only applies for directories, same with numChildren
+  tree_node **children; //only applies for directories, same with numChildren
   int numChildren;
   offset startOfData;
   size_t size; // only applies for files
@@ -332,10 +332,18 @@ static handle_t* get_handle(void *ptr, size_t size){
       //Here the memory has not been set, set all but header to 0's
       memset(ptr + sizeof(handle_t), 0, s);
     }
-  }
+  
     h->used_indicator = USED_INDICATOR;
     h->size = s;
     h->root = (offset) 0;
+    h->free = (offset) 0;
+  }
+  else{
+    block = (memory_block *) (ptr + sizeof(handle_t));
+    block->size = size;
+    block->next = (offset) 0;
+    h->free = ptr_to_offset(ptr, block);
+  }
     return h;
 }
 //Returns the largest block size
@@ -386,7 +394,52 @@ static size_t total_free_space(handle_t* h){
   }
   return total;
 }
+static memory_block * get_memory(handle_t *h, size_t size){
+  memory_block *curr, *next, *prev;
+  //Checks for null conditions
+  if(h == NULL){
+    return NULL;
+  }
+  if(size == (size_t) 0){
+    return NULL;
+  }
+  //If not free memory left
+  if(h->free == ((offset) 0)){
+    return NULL;
+  }
+  prev = NULL;
+  curr = (memory_block*) offset_to_ptr(h, h->free);
+  while(curr != NULL){
+    if(curr->size >= size){
+      if((curr->size - size) > sizeof(memory_block)){
+	memory_block * new = (memory_block*) ((void*) curr + size);
+	new->size = curr->size - size;
+	new->next = curr->next;
+	if(prev != NULL){
+	  prev->next = new;
+	}
+	else{
+	  h->free = ptr_to_offset(h, new);
+	}
+	curr->size = size;
+	return curr;
+      }
+      //size is too small, new slice will not be viable by itself
+      else{
+	if(prev == NULL){
+	  h->free = curr->next;
+	}
+	else{
+	  prev->next = curr->next;
+	}
+	curr->size = size;
+	return curr;
+      }
+    }
+  }
+         
 
+}
 static offset malloc_impl(handle_t *h, size_t size){
   size_t newSize;
   memory_block* block;
@@ -418,6 +471,56 @@ static offset malloc_impl(handle_t *h, size_t size){
     return (offset) 0;
   }
 }
+static offset realloc_impl(handle_t *h, offset prev, size_t size){
+  offset newOff;
+  memory_block *prev_block, *new;
+  /*STUB */
+}
+
+static void add_block(handle_t *h, memory_block *b){
+  memory_block *prev, *curr;
+  if(h == NULL){
+    return;
+  }
+  if(b == NULL){
+    return;
+  }
+  prev = NULL;
+  curr = (memory_block *) offset_to_ptr(h, h->free);
+  while(curr != NULL){
+    if(b < curr){
+      break;
+    }
+    prev = curr;
+    curr = (memory_block *) offset_to_ptr(h, curr->next);
+  }
+  if(prev == NULL){
+    b->next = h->free;
+    h->free = ptr_to_offset(h, b);
+    /*ADD MERGE BLOCKS HERE*/
+    // merge_blocks_impl(h);
+  }
+  else{
+    b->next =  ptr_to_offset(h, curr);
+    prev->next = ptr_to_offset(h, b);
+    //merge_blocks_impl(h);
+  }
+}
+static void free_impl(handle_t *h, offset o){
+  memory_block *block;
+  void *ptr;
+  if(h == NULL){
+    return;
+  }
+  if(o == (offset) 0){
+    return (offset) 0;
+  }
+  ptr = (offset_to_ptr(h, o)) - sizeof(memory_block);
+  block = (memory_block *) ptr;
+  add_block(h, block);
+}
+
+
 
     
 /*END MEMORY FUNCTIONS */
@@ -463,13 +566,17 @@ tree_node* find_node(const char *path, tree_node *curr, int lastIndex){
   //Search current's children for that slice
   for(i = 0; i < curr->numChildren; i++){
     //LAST ERROR HERE
-    if(strcmp(((curr->children[i]->name), subPath)) != 0){
+    if(strcmp(curr->children[i]->name, subPath) != 0){
       //Found in children, recurse using new information
+      if(curr->type != 1){
+	//if find node or get parent return -1, set errno to ENOTDIR
+	return -1;
+      }
       curr = curr->children[i];
       find_node(path, curr, nameLen);
     }
-    //If reached end of loop and none are equal, bad path, return NULL
-    return NULL;
+    //If reached end of loop and none are equal, bad path, return, set errno to ENOENT
+    return -2;
   }
 }
 tree_node* getParent(handle_t*h, const char *path){
@@ -492,7 +599,7 @@ int add_tree_node(tree_node* node, const char *path, handle_t *h){
   tree_node *root = (tree_node*)h->root;
   tree_node *parent_node = getParent(h, path);
   //If parent is null then path was bad
-  if(parent_node == NULL){
+  if(parent_node == -1){
     return -1;
   }
   //Adding a child to parent
@@ -504,6 +611,22 @@ int add_tree_node(tree_node* node, const char *path, handle_t *h){
   //Make node a child of parent node
   parent_node->children[parent_node->numChildren -1] = node;
 
+  return 0;
+}
+
+int remove_tree_node(handle_t *h, const char *path) {
+  //Can't delete root
+  if(strcmp(path, "/") == 0){
+    return -1;
+  }
+  tree_node *root = (tree_node*)h->root;
+  tree_node *parent_node = getParent(h, path);
+  tree_node *curr = find_node(path, root, 0);
+  for(int i = 0; i < (parent_node->numChildren - 1); i++){
+    parent_node->children[i] = parent_node->children[i+1];
+  }
+  parent_node->numChildren -= 1;
+  parent_node->children = realloc(parent_node->children, sizeof(tree_node *) * parent_node->numChildren);
   return 0;
 }
 /*END TREE FUNCTIONS */
@@ -781,13 +904,18 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
   }
   tree_node * root = (tree_node*) h->root;
   //Account for more errors here
-  //TODO find a way to get root here
+  
   tree_node* found = find_node(path, root, 0);
   //STUB
-  if(!found){
-    errnoptr = ENOENT;
+  if(found == -1){
+    *errnoptr = ENOTDIR;
     return -1;
   }
+  if(found == -2){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  
   else{
     //Found file or dir, populate stbuf with info provided
   stbuf->st_uid = uid;
@@ -851,17 +979,24 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   int numChildren;
   handle_t* h = get_handle(fsptr, fssize);
   if(h == NULL){
-    //TODO FIND THE ERROR CODE HERE
+    *errno = EFAULT;
     return -1;
   }
   dir = find_node(path, (tree_node*) h->root, 0);
-  if(dir->type != 2){
-    //TODO FIND ERROR CODE FOR NOT DIR
+  if((dir == -1) || (dir->type != 2)) {
+    *errnoptr = ENOTDIR;
+    return -1;
+  }
+  if(dir == -2){
+    *errnoptr = ENOENT;
     return -1;
   }
   if(dir->numChildren == 0){
     return 0;
   }
+
+  //update timestamp for directory, but not modified time
+  timestamp(dir,0);
   namesptr = (char*)malloc((dir->numChildren) * sizeof(void *));
   for(int i = 0; i < dir->numChildren; i++){
     *namesptr = (char*)calloc(sizeof(char), strlen(dir->children[i]));
@@ -892,10 +1027,18 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
 
   int i, path_length, file_index, file_length;
   tree_node *parent_node = NULL;
-  parent_node = getParent(fsptr, path);
-  if(parent_node == NULL){
-    //TODO FIND ERROR MESSAGE TO GO HERE FOR BAD PATH
-    //errnoptr = EFAULT ?
+  handle_t *h = get_handle(fsptr, fssize);
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  parent_node = getParent(h, path);
+  if(parent_node == -1){
+    *errnoptr = ENOTDIR;
+    return -1;
+  }
+  if(parent_node == -2){
+    *errnoptr = ENOENT;
     return -1;
   }
   path_length = strlen(path) - 1;
@@ -906,15 +1049,21 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
   
   char* fileName = (char*)malloc(sizeof(char) * (file_length));
   fileName[file_length] = "\0";
-  for(i = path_length; i > file_index; i--)
-    fileName[i] = path[i];
+  for(i = file_index, int j 0; i < strlen(path); i++, j++){
+    fileName[j] = path[i];
+  }
   tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
   *newNode->name = fileName;
   newNode->parent = parent_node;
   newNode->size = (size_t) 0;
   newNode->type = 1;
-  int fail = add_node(newNode, path, fsptr);
-  if(!fail){return 0;}
+  //Add new access and modify times for node, set to current time
+  timestamp(newNode, 1);
+  //Parent directory has been accessed and modified as well
+  timestamp(parent_node, 1);
+  int fail = add_tree_node(newNode, path, h);
+  if(!fail)
+    {return 0;}
   else{
     return -1;
   }
@@ -973,8 +1122,43 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  /* STUB */
+  handle_t *h = get_handle(fsptr, fssize);
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  tree_node * parent_node = getParent(h, path);
+  if(parent_node == -1){
+    *errnoptr = ENOTDIR;
+    return -1;
+  }
+  if(parent_node == -2){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  for(int i = strlen(path) -1; path[i] != "/"; i--){}
+  int dirIndex = i;
+  int dirNameLen = strlen(path) - i;
+  char *dirName = (char*) malloc(sizeof(char) * dirNameLen);
+  dirName[dirNameLen] = "\0";
+  for(i = dirIndex, int j = 0; i < strlen(path); i++, j++){
+    dirName[j] = path[i];
+  }
+  tree_node* newDir = (tree_node*) malloc(sizeof(tree_node));
+  *newDir->name = dirName;
+  newDir->type = 2;
+  newDir->parent = parent_node;
+  newDir->size = 0;
+  newDir->numChildren = 0;
+  timestamp(newDir, 1);
+  timestamp(parent_node, 1);
+  int fail = add_tree_node(newDir, path, h);
+  if(!fail){
+    return 0;
+  }
+  else{    
   return -1;
+  }
 }
 
 /* Implements an emulation of the rename system call on the filesystem 
@@ -1139,8 +1323,20 @@ int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr,
                          struct statvfs* stbuf) {
-  /* STUB */
-  return -1;
+  handle_t*h = get_handle(fsptr, fssize);
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  //Set to zeros
+  size_t total_mem = total_free_space(h);
+  memset(stbuf, 0, sizeof(statvfs));
+  stbuf->f_bsize = (__fsword_t) 1024;
+  stbuf->blocks = ((fsblkcnt_t) (fssize / 1024));
+  stbuf->bfree = ((fsblkcnt_t) (total_mem / 1024));
+  stbuf->bavail = ((fsblkcnt_t) (total_mem / 1024));
+  stbuf->f_namemax = 256;
+  return 0;
 }
 
 
