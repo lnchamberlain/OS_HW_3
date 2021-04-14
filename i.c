@@ -984,8 +984,23 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  /* STUB */
-  return -1;
+  handle_t h = get_handle(fsptr, fssize);
+  tree_node* root = h->root;
+  tree_node* node = find_node(node);
+  
+  // fail if directory is not found
+  if (node == NULL) {
+	  errnoptr = ENOENT;
+	  return -1;
+  }
+  
+  // check if the directory is not empty, failing if it is
+  if (node->numChildren > 0) {
+	  errnoptr = ENOTEMPTY;
+	  return -1;
+  }
+  
+  return 0;
 }
 
 /* Implements an emulation of the mkdir system call on the filesystem 
