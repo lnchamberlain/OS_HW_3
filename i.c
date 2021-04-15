@@ -962,26 +962,41 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
   handle_t *h = get_handle(fsptr, fssize);
-  int dirIndex, i, j;
+  int dirIndex, dirNameLen, i, j;
+  char *dirName;
   if(h == NULL){
     *errnoptr = EFAULT;
     return -1;
   }
   tree_node * parent_node = getParent(h, path);
-  if(parent_node == -1){
-    *errnoptr = ENOTDIR;
+  if(parent_node == NULL){
+    *errnoptr = ENOENT;
     return -1;
   }
-  if(parent_node == -2){
-    *errnoptr = ENOENT;
+  if(parent_node->type != 2){
+    *errnoptr = ENOTDIR;
+    free(h);
+    free(parent_node);
+    return -1;
+  }
+  if(find_node(path, (tree_node*)h->root, 0)){
+    *errnoptr = EEXIST;
+    free(h);
+    free(parent_node);
     return -1;
   }
   for(i = strlen(path) -1; path[i] != "/"; i--){
     dirIndex = i;
   }
   
-  int dirNameLen = strlen(path) - i;
-  char *dirName = (char*) malloc(sizeof(char) * dirNameLen);
+  dirNameLen = strlen(path) - i;
+  if(dirNameLen > MAX_NAME_LENGTH){
+    free(h);
+    free(parent_node);
+    *errnoptr = ENAMETOOLONG;
+    return -1;
+  }
+  dirName = (char*) malloc(sizeof(char) * dirNameLen);
   dirName[dirNameLen] = "\0";
   for(i = dirIndex, j = 0; i < strlen(path); i++, j++){
     dirName[j] = path[i];
@@ -1043,7 +1058,47 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
                            const char *path, off_t offset) {
-  /* STUB */
+  handle_t *h = get_handle(fsptr, fssize);
+  //Outside fs memory
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  tree_node *found = find_node(path, (tree_node*) h->root, 0);
+  //Bad path
+  if(found == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  if(found->type != 1){
+    *errnoptr = EISDIR;
+    return -1;
+  }
+  if(offset == 0){
+    *errnoptr = EINVAL;
+    return -1;
+  }
+  size_t size_request = (size_t) offset;
+  //Account for if file is already the right length
+  if(found->size == size_request){
+    //Change access but not modify time for dir
+    timestamp(found, 0);
+    return 0;
+  }
+  if(node->size < size_request){
+    //Account for case where file is empty
+    if(node->size == ((size_t) 0)){
+      //Allocate within fs mem
+      node->startOfData = malloc_impl(h, size_request);
+    }
+    else{
+      //realloc within fs mem
+      node->startOfData = realloc_impl(node->startOfData, size_request);
+      if(node->size < size_request){
+	memset(offset_to_ptr(node->startOfData + size_request), "0", sizeof(char));
+      }
+    }
+  
   return -1;
 }
 
