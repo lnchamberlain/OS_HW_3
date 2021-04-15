@@ -250,20 +250,23 @@ typedef struct handle_t{
 }handle_t;
 
 //Type dir_t is a directory, stores the number of children nodes and an offset to them
+/*
 typedef struct dir_t{
   int num_children;
   offset children;
 }dir_t;
-
+*/
+/*
 //Type file_t is a file, stores the size and the start of the file in the form of an offset
 typedef struct file_t{
   size_t size;
   offset start_of_file;
 }file_t;
+*/
 typedef struct tree_node tree_node;
 //General node type
 typedef struct tree_node{
-  int type; //1 for directories, 2 for files
+  int type; //2 for directories, 1 for files
   char name[256];
   uint32_t uid, gid; //User and group ID's
   int nlinks; //Number of links to node
@@ -513,7 +516,7 @@ static void free_impl(handle_t *h, offset o){
     return;
   }
   if(o == (offset) 0){
-    return (offset) 0;
+    return;
   }
   ptr = (offset_to_ptr(h, o)) - sizeof(memory_block);
   block = (memory_block *) ptr;
@@ -568,15 +571,15 @@ tree_node* find_node(const char *path, tree_node *curr, int lastIndex){
     //LAST ERROR HERE
     if(strcmp(curr->children[i]->name, subPath) != 0){
       //Found in children, recurse using new information
-      if(curr->type != 1){
-	//if find node or get parent return -1, set errno to ENOTDIR
-	return -1;
+      if(curr->type != 2){
+	//if find node or get parent return NULL
+	return NULL;
       }
       curr = curr->children[i];
       find_node(path, curr, nameLen);
     }
     //If reached end of loop and none are equal, bad path, return, set errno to ENOENT
-    return -2;
+    return NULL;
   }
 }
 tree_node* getParent(handle_t*h, const char *path){
@@ -599,8 +602,8 @@ int add_tree_node(tree_node* node, const char *path, handle_t *h){
   tree_node *root = (tree_node*)h->root;
   tree_node *parent_node = getParent(h, path);
   //If parent is null then path was bad
-  if(parent_node == -1){
-    return -1;
+  if(parent_node == NULL){
+    return NULL;
   }
   //Adding a child to parent
   parent_node->numChildren += 1;
@@ -616,259 +619,41 @@ int add_tree_node(tree_node* node, const char *path, handle_t *h){
 
 int remove_tree_node(handle_t *h, const char *path) {
   //Can't delete root
+  int i, nodeIndex;
   if(strcmp(path, "/") == 0){
     return -1;
   }
   tree_node *root = (tree_node*)h->root;
   tree_node *parent_node = getParent(h, path);
-  tree_node *curr = find_node(path, root, 0);
-  for(int i = 0; i < (parent_node->numChildren - 1); i++){
-    parent_node->children[i] = parent_node->children[i+1];
+  tree_node *deleted_node = find_node(path, (tree_node*) h->root, 0);
+  deleted_node->size = (size_t) 0;
+  //offset startOfData
+  //Free memory space used by node
+  free_impl(h, deleted_node->startOfData);  
+  if(parent_node == NULL){
+    return NULL;
   }
+  for(i = 0; i < parent_node->numChildren; i++){
+    if(strcmp(parent_node->children[i]->name, deleted_node->name)){
+      nodeIndex = i;
+      break;
+    }
+  }
+  //Ensure that the node to be deleted is the last in the array
+  if(nodeIndex != parent_node->numChildren - 1){
+    tree_node *temp = parent_node->children[parent_node->numChildren -1];
+    parent_node->children[parent_node->numChildren -1] = deleted_node;
+    parent_node->children[nodeIndex] = temp;
+  }
+  
   parent_node->numChildren -= 1;
+  //Calling realloc with a smaller size will free the last position
   parent_node->children = realloc(parent_node->children, sizeof(tree_node *) * parent_node->numChildren);
+  free(deleted_node);
+  free(parent_node);
   return 0;
 }
 /*END TREE FUNCTIONS */
-
-/*
-
-  MyFS: a tiny file-system written for educational purposes
-
-  MyFS is 
-
-  Copyright 2018-21 by
-
-  University of Alaska Anchorage, College of Engineering.
-
-  Contributors: Christoph Lauter
-                ... and
-                ...
-
-  and based on 
-
-  FUSE: Filesystem in Userspace
-  Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
-
-  This program can be distributed under the terms of the GNU GPL.
-  See the file COPYING.
-
-  gcc -Wall myfs.c implementation.c `pkg-config fuse --cflags --libs` -o myfs
-
-*/
-
-#include <stddef.h>
-#include <sys/stat.h>
-#include <sys/statvfs.h>
-#include <stdint.h>
-#include <string.h>
-#include <time.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <stdio.h>
-
-
-/* The filesystem you implement must support all the 13 operations
-   stubbed out below. There need not be support for access rights,
-   links, symbolic links. There needs to be support for access and
-   modification times and information for statfs.
-
-   The filesystem must run in memory, using the memory of size 
-   fssize pointed to by fsptr. The memory comes from mmap and 
-   is backed with a file if a backup-file is indicated. When
-   the filesystem is unmounted, the memory is written back to 
-   that backup-file. When the filesystem is mounted again from
-   the backup-file, the same memory appears at the newly mapped
-   in virtual address. The filesystem datastructures hence must not
-   store any pointer directly to the memory pointed to by fsptr; it
-   must rather store offsets from the beginning of the memory region.
-
-   When a filesystem is mounted for the first time, the whole memory
-   region of size fssize pointed to by fsptr reads as zero-bytes. When
-   a backup-file is used and the filesystem is mounted again, certain
-   parts of the memory, which have previously been written, may read
-   as non-zero bytes. The size of the memory region is at least 2048
-   bytes.
-
-   CAUTION:
-
-   * You MUST NOT use any global variables in your program for reasons
-   due to the way FUSE is designed.
-
-   You can find ways to store a structure containing all "global" data
-   at the start of the memory region representing the filesystem.
-
-   * You MUST NOT store (the value of) pointers into the memory region
-   that represents the filesystem. Pointers are virtual memory
-   addresses and these addresses are ephemeral. Everything will seem
-   okay UNTIL you remount the filesystem again.
-
-   You may store offsets/indices (of type size_t) into the
-   filesystem. These offsets/indices are like pointers: instead of
-   storing the pointer, you store how far it is away from the start of
-   the memory region. You may want to define a type for your offsets
-   and to write two functions that can convert from pointers to
-   offsets and vice versa.
-
-   * You may use any function out of libc for your filesystem,
-   including (but not limited to) malloc, calloc, free, strdup,
-   strlen, strncpy, strchr, strrchr, memset, memcpy. However, your
-   filesystem MUST NOT depend on memory outside of the filesystem
-   memory region. Only this part of the virtual memory address space
-   gets saved into the backup-file. As a matter of course, your FUSE
-   process, which implements the filesystem, MUST NOT leak memory: be
-   careful in particular not to leak tiny amounts of memory that
-   accumulate over time. In a working setup, a FUSE process is
-   supposed to run for a long time!
-
-   It is possible to check for memory leaks by running the FUSE
-   process inside valgrind:
-
-   valgrind --leak-check=full ./myfs --backupfile=test.myfs ~/fuse-mnt/ -f
-
-   However, the analysis of the leak indications displayed by valgrind
-   is difficult as libfuse contains some small memory leaks (which do
-   not accumulate over time). We cannot (easily) fix these memory
-   leaks inside libfuse.
-
-   * Avoid putting debug messages into the code. You may use fprintf
-   for debugging purposes but they should all go away in the final
-   version of the code. Using gdb is more professional, though.
-
-   * You MUST NOT fail with exit(1) in case of an error. All the
-   functions you have to implement have ways to indicated failure
-   cases. Use these, mapping your internal errors intelligently onto
-   the POSIX error conditions.
-
-   * And of course: your code MUST NOT SEGFAULT!
-
-   It is reasonable to proceed in the following order:
-
-   (1)   Design and implement a mechanism that initializes a filesystem
-         whenever the memory space is fresh. That mechanism can be
-         implemented in the form of a filesystem handle into which the
-         filesystem raw memory pointer and sizes are translated.
-         Check that the filesystem does not get reinitialized at mount
-         time if you initialized it once and unmounted it but that all
-         pieces of information (in the handle) get read back correctly
-         from the backup-file. 
-
-   (2)   Design and implement functions to find and allocate free memory
-         regions inside the filesystem memory space. There need to be 
-         functions to free these regions again, too. Any "global" variable
-         goes into the handle structure the mechanism designed at step (1) 
-         provides.
-
-   (3)   Carefully design a data structure able to represent all the
-         pieces of information that are needed for files and
-         (sub-)directories.  You need to store the location of the
-         root directory in a "global" variable that, again, goes into the 
-         handle designed at step (1).
-          
-   (4)   Write __myfs_getattr_implem and debug it thoroughly, as best as
-         you can with a filesystem that is reduced to one
-         function. Writing this function will make you write helper
-         functions to traverse paths, following the appropriate
-         subdirectories inside the file system. Strive for modularity for
-         these filesystem traversal functions.
-
-   (5)   Design and implement __myfs_readdir_implem. You cannot test it
-         besides by listing your root directory with ls -la and looking
-         at the date of last access/modification of the directory (.). 
-         Be sure to understand the signature of that function and use
-         caution not to provoke segfaults nor to leak memory.
-
-   (6)   Design and implement __myfs_mknod_implem. You can now touch files 
-         with 
-
-         touch foo
-
-         and check that they start to exist (with the appropriate
-         access/modification times) with ls -la.
-
-   (7)   Design and implement __myfs_mkdir_implem. Test as above.
-
-   (8)   Design and implement __myfs_truncate_implem. You can now 
-         create files filled with zeros:
-
-         truncate -s 1024 foo
-
-   (9)   Design and implement __myfs_statfs_implem. Test by running
-         df before and after the truncation of a file to various lengths. 
-         The free "disk" space must change accordingly.
-
-   (10)  Design, implement and test __myfs_utimens_implem. You can now 
-         touch files at different dates (in the past, in the future).
-
-   (11)  Design and implement __myfs_open_implem. The function can 
-         only be tested once __myfs_read_implem and __myfs_write_implem are
-         implemented.
-
-   (12)  Design, implement and test __myfs_read_implem and
-         __myfs_write_implem. You can now write to files and read the data 
-         back:
-
-         echo "Hello world" > foo
-         echo "Hallo ihr da" >> foo
-         cat foo
-
-         Be sure to test the case when you unmount and remount the
-         filesystem: the files must still be there, contain the same
-         information and have the same access and/or modification
-         times.
-
-   (13)  Design, implement and test __myfs_unlink_implem. You can now
-         remove files.
-
-   (14)  Design, implement and test __myfs_unlink_implem. You can now
-         remove directories.
-
-   (15)  Design, implement and test __myfs_rename_implem. This function
-         is extremely complicated to implement. Be sure to cover all 
-         cases that are documented in man 2 rename. The case when the 
-         new path exists already is really hard to implement. Be sure to 
-         never leave the filessystem in a bad state! Test thoroughly 
-         using mv on (filled and empty) directories and files onto 
-         inexistant and already existing directories and files.
-
-   (16)  Design, implement and test any function that your instructor
-         might have left out from this list. There are 13 functions 
-         __myfs_XXX_implem you have to write.
-
-   (17)  Go over all functions again, testing them one-by-one, trying
-         to exercise all special conditions (error conditions): set
-         breakpoints in gdb and use a sequence of bash commands inside
-         your mounted filesystem to trigger these special cases. Be
-         sure to cover all funny cases that arise when the filesystem
-         is full but files are supposed to get written to or truncated
-         to longer length. There must not be any segfault; the user
-         space program using your filesystem just has to report an
-         error. Also be sure to unmount and remount your filesystem,
-         in order to be sure that it contents do not change by
-         unmounting and remounting. Try to mount two of your
-         filesystems at different places and copy and move (rename!)
-         (heavy) files (your favorite movie or song, an image of a cat
-         etc.) from one mount-point to the other. None of the two FUSE
-         processes must provoke errors. Find ways to test the case
-         when files have holes as the process that wrote them seeked
-         beyond the end of the file several times. Your filesystem must
-         support these operations at least by making the holes explicit 
-         zeros (use dd to test this aspect).
-
-   (18)  Run some heavy testing: copy your favorite movie into your
-         filesystem and try to watch it out of the filesystem.
-
-*/
-
-/* Helper types and functions */
-
-/* YOUR HELPER FUNCTIONS GO HERE */
-
-/* End of helper functions */
-
 /* Implements an emulation of the stat system call on the filesystem 
    of size fssize pointed to by fsptr. 
    
@@ -900,19 +685,16 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, struct stat *stbuf) {
   handle_t* h = get_handle(fsptr, fssize);
   if(h == NULL){
-    return NULL;
+    *errnoptr = ENOMEM;
+    return -1;
   }
   tree_node * root = (tree_node*) h->root;
   //Account for more errors here
   
   tree_node* found = find_node(path, root, 0);
   //STUB
-  if(found == -1){
-    *errnoptr = ENOTDIR;
-    return -1;
-  }
-  if(found == -2){
-    *errnoptr = ENOENT;
+  if(found == NULL){
+    *errnoptr = EFAULT;
     return -1;
   }
   
@@ -935,7 +717,6 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
   }
   return 0;
 }
-  /* STUB */
 
 /* Implements an emulation of the readdir system call on the filesystem 
    of size fssize pointed to by fsptr. 
@@ -976,32 +757,41 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr) {
   tree_node *dir;
-  int numChildren;
+  int numChildren, i;
+  char ** nameArray;
   handle_t* h = get_handle(fsptr, fssize);
   if(h == NULL){
-    *errno = EFAULT;
+    *errnoptr = EFAULT;
     return -1;
   }
   dir = find_node(path, (tree_node*) h->root, 0);
-  if((dir == -1) || (dir->type != 2)) {
-    *errnoptr = ENOTDIR;
-    return -1;
-  }
-  if(dir == -2){
+  if(dir == NULL){
     *errnoptr = ENOENT;
     return -1;
   }
+  if((dir->type != 2)) {
+    *errnoptr = ENOTDIR;
+    return -1;
+  }
+  //No allocation if empty directory
   if(dir->numChildren == 0){
     return 0;
   }
 
   //update timestamp for directory, but not modified time
-  timestamp(dir,0);
-  namesptr = (char*)malloc((dir->numChildren) * sizeof(void *));
-  for(int i = 0; i < dir->numChildren; i++){
-    *namesptr = (char*)calloc(sizeof(char), strlen(dir->children[i]));
-    strcpy(dir->children[i], *namesptr[i]);
-   }
+  time_stamp(dir,0);
+  //Create array for child names, set all to 0
+  nameArray = (char*) calloc(sizeof(char), sizeof(char) * dir->numChildren);
+  //If cannot allocate because too small
+  if(nameArray == NULL){
+    free(nameArray);
+    *errnoptr = EINVAL;
+    return -1;
+  }
+  for(i = 0; i < dir->numChildren; i++){
+    strcpy(nameArray[i], dir->children[i]->name);
+  }
+  *namesptr = nameArray;
   return dir->numChildren;
 }
 
@@ -1025,45 +815,62 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
 
-  int i, path_length, file_index, file_length;
+  int i, j, path_length, file_index, file_length;
   tree_node *parent_node = NULL;
+  tree_node *new_file = NULL;
   handle_t *h = get_handle(fsptr, fssize);
+  if(path == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
   if(h == NULL){
     *errnoptr = EFAULT;
     return -1;
   }
   parent_node = getParent(h, path);
-  if(parent_node == -1){
+  if(parent_node == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  //If parent node is not a directory, set errno to ENOTDIR
+  if(parent_node->type != 2){
     *errnoptr = ENOTDIR;
     return -1;
   }
-  if(parent_node == -2){
-    *errnoptr = ENOENT;
+  //If a there is already a node, exit
+  if(find_node(path, (tree_node*)h->root, 0)){
+    *errnoptr = EEXIST;
     return -1;
   }
+  //Max name length is 256, if too long, exit
   path_length = strlen(path) - 1;
   for(i = path_length; path[i] != "/"; i--){
   }
   file_index = i;
   file_length = path_length - file_index + 1;
-  
+  if(file_length > MAX_NAME_LENGTH){
+    *errnoptr = ENAMETOOLONG;
+    return -1;
+  }
   char* fileName = (char*)malloc(sizeof(char) * (file_length));
   fileName[file_length] = "\0";
-  for(i = file_index, int j 0; i < strlen(path); i++, j++){
+  for(i = file_index, j = 0; i < strlen(path); i++, j++){
     fileName[j] = path[i];
   }
-  tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
-  *newNode->name = fileName;
-  newNode->parent = parent_node;
-  newNode->size = (size_t) 0;
-  newNode->type = 1;
-  //Add new access and modify times for node, set to current time
-  timestamp(newNode, 1);
+  new_file = (tree_node*)malloc(sizeof(tree_node));
+  *new_file->name = fileName;
+  new_file->parent = parent_node;
+  new_file->size = (size_t) 0;
+  new_file->type = 1;
+   //Add new access and modify times for node, set to current time
+  time_stamp(new_file, 1);
   //Parent directory has been accessed and modified as well
-  timestamp(parent_node, 1);
-  int fail = add_tree_node(newNode, path, h);
+  time_stamp(parent_node, 1);
+  int fail = add_tree_node(new_file, path, h);
   if(!fail)
-    {return 0;}
+    {
+      return 0;
+    }
   else{
     return -1;
   }
@@ -1104,8 +911,40 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  /* STUB */
-  return -1;
+  handle_t *h;
+  tree_node *curr, *parent_node;
+  int i;
+  //Must pass valid path name
+  if(path == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  h = get_handle(fsptr, fssize);
+  //Pointer outside fs space
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  parent_node = getParent(h, path);
+  //Bad path
+  if(parent_node == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  if(parent_node->type != 2){
+    *errnoptr = ENOTDIR;
+    return -1;
+  }
+  if(parent_node->numChildren != 0){
+    *errnoptr = ENOTEMPTY;
+    return -1;
+  }
+  if(!remove_tree_node(h, path)){
+    return 0;
+  }
+  else{ 
+    return -1;
+  }
 }
 
 /* Implements an emulation of the mkdir system call on the filesystem 
@@ -1123,6 +962,7 @@ int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
   handle_t *h = get_handle(fsptr, fssize);
+  int dirIndex, i, j;
   if(h == NULL){
     *errnoptr = EFAULT;
     return -1;
@@ -1136,12 +976,14 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
     *errnoptr = ENOENT;
     return -1;
   }
-  for(int i = strlen(path) -1; path[i] != "/"; i--){}
-  int dirIndex = i;
+  for(i = strlen(path) -1; path[i] != "/"; i--){
+    dirIndex = i;
+  }
+  
   int dirNameLen = strlen(path) - i;
   char *dirName = (char*) malloc(sizeof(char) * dirNameLen);
   dirName[dirNameLen] = "\0";
-  for(i = dirIndex, int j = 0; i < strlen(path); i++, j++){
+  for(i = dirIndex, j = 0; i < strlen(path); i++, j++){
     dirName[j] = path[i];
   }
   tree_node* newDir = (tree_node*) malloc(sizeof(tree_node));
@@ -1150,8 +992,8 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   newDir->parent = parent_node;
   newDir->size = 0;
   newDir->numChildren = 0;
-  timestamp(newDir, 1);
-  timestamp(parent_node, 1);
+  time_stamp(newDir, 1);
+  time_stamp(parent_node, 1);
   int fail = add_tree_node(newDir, path, h);
   if(!fail){
     return 0;
@@ -1233,8 +1075,19 @@ int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
                        const char *path) {
-  /* STUB */
-  return -1;
+  handle_t *h = get_handle(fsptr, fssize);
+  //Outside fs memory
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  tree_node *found = find_node(path, (tree_node*) h->root, 0);
+  //Bad path
+  if(found == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  return 0;
 }
 
 /* Implements an emulation of the read system call on the filesystem 
@@ -1294,8 +1147,19 @@ int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, const struct timespec ts[2]) {
-  /* STUB */
-  return -1;
+  handle_t *h = get_handle(fsptr, fssize);
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  tree_node* node = find_node(path, (tree_node*)h->root, 0);
+  if(node == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  node->st_atim = ts[0];
+  node->st_mtim = ts[1];
+  return 0;
 }
 
 /* Implements an emulation of the statfs system call on the filesystem 
@@ -1332,9 +1196,9 @@ int __myfs_statfs_implem(void *fsptr, size_t fssize, int *errnoptr,
   size_t total_mem = total_free_space(h);
   memset(stbuf, 0, sizeof(statvfs));
   stbuf->f_bsize = (__fsword_t) 1024;
-  stbuf->blocks = ((fsblkcnt_t) (fssize / 1024));
-  stbuf->bfree = ((fsblkcnt_t) (total_mem / 1024));
-  stbuf->bavail = ((fsblkcnt_t) (total_mem / 1024));
+  stbuf->f_blocks = ((fsblkcnt_t) (fssize / 1024));
+  stbuf->f_bfree = ((fsblkcnt_t) (total_mem / 1024));
+  stbuf->f_bavail = ((fsblkcnt_t) (total_mem / 1024));
   stbuf->f_namemax = 256;
   return 0;
 }
