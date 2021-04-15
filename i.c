@@ -1052,6 +1052,20 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                          const char *from, const char *to) {
   /* STUB */
+  if (from == NULL || to == NULL) {
+	  // ENOENT if path is empty
+	  *errnoptr = ENOENT;
+	  return -1
+  }
+  handle_t h = get_handle(fsptr, fssize);
+  
+  if (h == NULL) {
+	  *errnoptr = EFAULT;
+	  return -1;
+  }
+  
+  tree_node* root = h->root;
+  tree_node* node = find_node(path, root, 0);
   return -1;
 }
 
@@ -1127,7 +1141,39 @@ int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
                        const char *path, char *buf, size_t size, off_t offset) {
   /* STUB */
-  return -1;
+  if (path == NULL) {
+	  // ENOENT if path is empty
+	  *errnoptr = ENOENT;
+	  return -1
+  }
+  handle_t h = get_handle(fsptr, fssize);
+  
+  if (h == NULL) {
+	  *errnoptr = EFAULT;
+	  return -1;
+  }
+  
+  tree_node* root = h->root;
+  tree_node* node = find_node(path, root, 0);
+  
+  if (offset > node->size) {
+	  *errnoptr = EINVAL;
+	  return -1;
+  }
+  
+  void* cursor = offset_to_ptr(fsptr, (offset) (node->startOfData+offset));
+  
+  size_t i;
+  //size_t bytesRead = 0;
+  
+  char* content = (char*) cursor;
+  
+  for (i = 0; i < size; i++) {
+	  *(buff + i) = *(content + i);
+	  //bytesRead++;
+  }
+  
+  return i;
 }
 
 /* Implements an emulation of the write system call on the filesystem 
