@@ -954,6 +954,11 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
 	  *errnoptr = ENOENT;
 	  return -1
   }
+  if (strlen(path) > 255) {
+	  // can't remember/find the error code for ENAMETOOLONG
+	  return -1;
+  }
+  
   handle_t h = get_handle(fsptr, fssize);
   
   if (h == NULL) {
@@ -1063,6 +1068,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
 	  *errnoptr = EFAULT;
 	  return -1;
   }
+  
+  if (h->nameLen
   
   tree_node* root = h->root;
   tree_node* node = find_node(path, root, 0);
