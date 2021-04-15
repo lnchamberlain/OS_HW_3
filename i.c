@@ -1144,9 +1144,9 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
   if (path == NULL) {
 	  // ENOENT if path is empty
 	  *errnoptr = ENOENT;
-	  return -1
+	  return -1;
   }
-  handle_t h = get_handle(fsptr, fssize);
+  handle_t* h = get_handle(fsptr, fssize);
   
   if (h == NULL) {
 	  *errnoptr = EFAULT;
@@ -1156,12 +1156,17 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
   tree_node* root = h->root;
   tree_node* node = find_node(path, root, 0);
   
+  if (node == NULL) {
+	  return -1;
+  }
+  
   if (offset > node->size) {
 	  *errnoptr = EINVAL;
 	  return -1;
   }
   
-  void* cursor = offset_to_ptr(fsptr, (offset) (node->startOfData+offset));
+  //void* cursor = offset_to_ptr(fsptr, (offset) (node->startOfData+offset));
+  void* cursor = offset_to_ptr(fsptr, node->startOfData+offset);
   
   size_t i;
   //size_t bytesRead = 0;
@@ -1169,7 +1174,7 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
   char* content = (char*) cursor;
   
   for (i = 0; i < size; i++) {
-	  *(buff + i) = *(content + i);
+	  *(buf + i) = *(content + i);
 	  //bytesRead++;
   }
   
