@@ -521,6 +521,23 @@ int remove_tree_node(tree_node* node) {
 	
 	return 0;
 }
+
+int deepCopy(tree_node* source, tree_node* dest, offset parOff, uint32_t uid, uint32_t gid) {
+	dest->type = source->type;
+	dest->name = source->name;
+	dest->uid = uid;
+	dest->gid = gid;
+	dest->nlinks = source->nlinks;
+	dest->parent = parOff;
+	dest->numChildren = source->numChildren;
+	dest->startOfData = source->startOfData;
+	dest->size = source->size;
+	dest->st_atim = source->st_atim;
+	dest->st_mtim = source->st_mtim;
+	dest->st_ctim = source->st_ctim;
+	
+	return 0;
+}
 /*END TREE FUNCTIONS */
 
 /*
