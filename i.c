@@ -522,13 +522,31 @@ int remove_tree_node(tree_node* node) {
 	return 0;
 }
 
-int deepCopy(tree_node* source, tree_node* dest, offset parOff, uint32_t uid, uint32_t gid) {
+// original definition included path, which isn't necessary
+/* int deepCopy(tree_node* source, tree_node* dest, offset parOff, uint32_t uid, uint32_t gid) {
 	dest->type = source->type;
 	dest->name = source->name;
 	dest->uid = uid;
 	dest->gid = gid;
 	dest->nlinks = source->nlinks;
 	dest->parent = parOff;
+	dest->numChildren = source->numChildren;
+	dest->startOfData = source->startOfData;
+	dest->size = source->size;
+	dest->st_atim = source->st_atim;
+	dest->st_mtim = source->st_mtim;
+	dest->st_ctim = source->st_ctim;
+	
+	return 0;
+} */
+
+int deepCopy(tree_node* source, tree_node* dest) {
+	dest->type = source->type;
+	dest->name = source->name;
+	// not sure if these need to be assigned
+	/* dest->uid = uid;
+	dest->gid = gid; */
+	dest->nlinks = source->nlinks;
 	dest->numChildren = source->numChildren;
 	dest->startOfData = source->startOfData;
 	dest->size = source->size;
@@ -976,7 +994,7 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
 	  return -1;
   }
   
-  handle_t h = get_handle(fsptr, fssize);
+  handle_t* h = get_handle(fsptr, fssize);
   
   if (h == NULL) {
 	  *errnoptr = EFAULT;
@@ -1012,7 +1030,7 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
-  handle_t h = get_handle(fsptr, fssize);
+  handle_t* h = get_handle(fsptr, fssize);
   
   if (h == NULL) {
 	  *errnoptr = EFAULT;
@@ -1079,17 +1097,21 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
 	  *errnoptr = ENOENT;
 	  return -1
   }
-  handle_t h = get_handle(fsptr, fssize);
+  handle_t* h = get_handle(fsptr, fssize);
   
   if (h == NULL) {
 	  *errnoptr = EFAULT;
 	  return -1;
   }
   
-  if (h->nameLen
-  
-  tree_node* root = h->root;
-  tree_node* node = find_node(path, root, 0);
+  if (strcmp(from, to) != 0) {
+	  tree_node* root = h->root;
+	  tree_node* node = find_node(path, root, 0);
+	  tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
+	  add_tree_node(newNode, to, h);
+	  deepCopy(node, newNode);
+	  remove_tree_node(node);
+  }
   return -1;
 }
 
