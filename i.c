@@ -1104,14 +1104,18 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
 	  return -1;
   }
   
+  //tree_node* root = h->root;
+  //tree_node* node = find_node(from, root, 0);
+  
   if (strcmp(from, to) != 0) {
 	  tree_node* root = h->root;
-	  tree_node* node = find_node(path, root, 0);
+	  tree_node* node = find_node(from, root, 0);
 	  tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
 	  add_tree_node(newNode, to, h);
 	  deepCopy(node, newNode);
 	  remove_tree_node(node);
   }
+  
   return -1;
 }
 
