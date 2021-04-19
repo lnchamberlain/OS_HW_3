@@ -308,7 +308,7 @@ off_t ptr_to_offset(void* fs_start, void * ptr){
 
 /*BEGIN MEMORY FUNCTIONS, COPIED FROM HW2 and changed to work with handles rather than pointers*/
 static handle_t* get_handle(void *ptr, size_t size){
-    handle_t* h = malloc(sizeof(handle_t));
+  handle_t* h = malloc(sizeof(handle_t));
   size_t s;
   memory_block *block;
   //cast pointer to a handle
@@ -369,7 +369,7 @@ static size_t total_free_space( handle_t* h){
   if(h == NULL){
     return NULL;
   }
-  if(h->size =(size_t) 0){
+  if(h->size ==(size_t) 0){
     return (size_t) 0;
   }
   temp = offset_to_ptr(h, h->size);
@@ -383,7 +383,7 @@ static size_t total_free_space( handle_t* h){
   return total;
 }
 static memory_block * get_memory( handle_t* h, size_t size){
-  memory_block *curr, *next, *prev;
+  memory_block *curr, *prev;
   //Checks for null conditions
   if(h == NULL){
     return NULL;
@@ -404,7 +404,7 @@ static memory_block * get_memory( handle_t* h, size_t size){
 	new->size = curr->size - size;
 	new->next = curr->next;
 	if(prev != NULL){
-	  prev->next = new;
+	  prev->next = ptr_to_offset(h, new);
 	}
 	else{
 	  h->free = ptr_to_offset(h, new);
@@ -451,7 +451,7 @@ static off_t malloc_impl( handle_t* h, size_t size){
   free_space_ptr = ((void *) block) + sizeof(memory_block);
   block->total_size = size;
   
-  result = offset_to_ptr(h, free_space_ptr);
+  result = ptr_to_offset(h, free_space_ptr);
   if(result){
     return result;
   }
@@ -461,7 +461,6 @@ static off_t malloc_impl( handle_t* h, size_t size){
 }
 static void free_impl( handle_t* h, off_t o);
 static off_t realloc_impl( handle_t* h, off_t prev, size_t size){
-  off_t newOff;
   void * prev_pointer, *new_pointer;
   memory_block *prev_block, *new;
   if(h == NULL){
@@ -475,8 +474,8 @@ static off_t realloc_impl( handle_t* h, off_t prev, size_t size){
   //Account for size of header
   prev_block = (memory_block*)prev_pointer - (sizeof(memory_block));
   size_t newSize = size + sizeof(memory_block);
-  new = malloc_impl(h, newSize);
-  new_pointer = offset_to_ptr(h, new);
+  new = (memory_block*)offset_to_ptr(h, malloc_impl(h, newSize));
+  new_pointer = (void*)new;
   new->size = size;
   new->next = ((off_t) 0);
   new->total_size = ((size_t) 0);
@@ -538,21 +537,8 @@ static void free_impl( handle_t* h, off_t o){
 /*END MEMORY FUNCTIONS */
     
 /*BEGIN TREE FUNCTIONS */
-//create tree is defined as a init function so we can check if the filesystem has been unmounted, and if so then root does not need to be created
-/*
-void create_tree(){
-  inode* root = (inode*)malloc(sizeof(inode)); //TODO Change to use our implementation of malloc
-  root->type = 2; //2 is for directories
-  root->name = "/";
-  root->nlinks = 2; // nlinks is 2 for directories, 1 for files
-  root->parent = NULL;
-  root->data = NULL;
-  root->size = 0;
-  root->numChildren = 0;
-}
-*/
 inode* getParent(handle_t* h, const char *path);
-inode* find_node(const char *path, inode *curr, int lastIndex){
+inode* find_node(handle_t* h, const char *path, inode *curr, int lastIndex){
   int i, j, oldnameLen, nameLen;
   char* subPath = NULL;
   if(path[lastIndex] != "/"){
@@ -576,16 +562,18 @@ inode* find_node(const char *path, inode *curr, int lastIndex){
   }
   //Found name of the next path step
   //Search current's children for that slice
+  char * child = (char*) malloc(sizeof(char) * MAX_NAME_LENGTH);
   for(i = 0; i < curr->numChildren; i++){
-    //LAST ERROR HERE
-    if(strcmp(curr->children[i]->name, subPath) != 0){
+    child = curr->offset_to_ptr(h,children[i])->name;
+    if(strcmp(child, subPath) != 0){
       //Found in children, recurse using new information
       if(curr->type != 2){
 	//if find node or get parent return NULL
 	return NULL;
       }
-      curr = curr->children[i];
-      find_node(path, curr, nameLen);
+      curr = offset_to_ptr(h, curr->children[i]);
+      free(child);
+      find_node(h, path, curr, nameLen);
     }
     //If reached end of loop and none are equal, bad path, return, set errno to ENOENT
     return NULL;
@@ -602,13 +590,12 @@ inode* getParent( handle_t* h, const char *path){
   for(i = 0; i < newLength; i++){
     subPath[i] = path[i];
   }
-  parent_node = find_node(subPath, root, 0);
+  parent_node = find_node(h, subPath, root, 0);
   return parent_node;
     }
 
 int add_tree_node(inode* node, const char *path, handle_t* h){
   //Pass around the start of the filessystem to avoid global variables
-  inode *root = (inode*)h->root;
   inode *parent_node = getParent(h, path);
   //If parent is null then path was bad
   if(parent_node == NULL){
@@ -617,11 +604,11 @@ int add_tree_node(inode* node, const char *path, handle_t* h){
   //Adding a child to parent
   parent_node->numChildren += 1;
   //Account for the new child added
-  parent_node->children = realloc(parent_node->children, sizeof(inode *) * parent_node->numChildren);
+  parent_node->children = realloc_impl(h, parent_node->children, sizeof(inode *) * parent_node->numChildren);
   //Create space for child to be added
-  parent_node->children[parent_node->numChildren - 1] = (inode *)malloc(sizeof(inode));
+  parent_node->children[parent_node->numChildren - 1] = malloc_impl(h,(sizeof(inode)));
   //Make node a child of parent node
-  parent_node->children[parent_node->numChildren -1] = node;
+  parent_node->children[parent_node->numChildren -1] = ptr_to_offset(h, node);
 
   return 0;
 }
@@ -634,7 +621,7 @@ int remove_tree_node( handle_t* h, const char *path) {
   }
   inode *root = (inode*)h->root;
   inode *parent_node = getParent(h, path);
-  inode *deleted_node = find_node(path, (inode*) h->root, 0);
+  inode *deleted_node = find_node(h, path, (inode*) h->root, 0);
   deleted_node->size = (size_t) 0;
   //off_t startOfData
   //Free memory space used by node
@@ -642,17 +629,20 @@ int remove_tree_node( handle_t* h, const char *path) {
   if(parent_node == NULL){
     return NULL;
   }
+  char * child = (char*) malloc(sizeof(char)*MAX_NAME_LENGTH);
   for(i = 0; i < parent_node->numChildren; i++){
-    if(strcmp(parent_node->children[i]->name, deleted_node->name)){
+    child = offset_to_ptr(h, parent_node->children[i])->name;
+    if(strcmp(child, deleted_node->name)){
       nodeIndex = i;
+      free(child);
       break;
     }
   }
   //Ensure that the node to be deleted is the last in the array
   if(nodeIndex != parent_node->numChildren - 1){
-    inode *temp = parent_node->children[parent_node->numChildren -1];
-    parent_node->children[parent_node->numChildren -1] = deleted_node;
-    parent_node->children[nodeIndex] = temp;
+						inode *temp = offset_to_ptr(h, parent_node->children[parent_node->numChildren -1]);
+						parent_node->children[parent_node->numChildren -1] = ptr_to_offset(h, deleted_node);
+						parent_node->children[nodeIndex] = ptr_to_offset(h, temp);
   }
   
   parent_node->numChildren -= 1;
@@ -700,7 +690,7 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
   inode * root = (inode*) h->root;
   //Account for more errors here
   
-  inode* found = find_node(path, root, 0);
+  inode* found = find_node(h, path, root, 0);
   //STUB
   if(found == NULL){
     *errnoptr = EFAULT;
@@ -768,12 +758,12 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   inode *dir;
   int numChildren, i;
   char ** nameArray;
-       handle_t* h = get_handle(fsptr, fssize);
+  handle_t* h = get_handle(fsptr, fssize);
   if(h == NULL){
     *errnoptr = EFAULT;
     return -1;
   }
-  dir = find_node(path, (inode*) h->root, 0);
+  dir = find_node(h, path, (inode*) h->root, 0);
   if(dir == NULL){
     *errnoptr = ENOENT;
     return -1;
@@ -790,7 +780,7 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   //update timestamp for directory, but not modified time
   time_stamp(dir,0);
   //Create array for child names, set all to 0
-  nameArray = (char*) calloc(sizeof(char), sizeof(char) * dir->numChildren);
+  *nameArray = (char*) calloc(sizeof(char), sizeof(char) * dir->numChildren);
   //If cannot allocate because too small
   if(nameArray == NULL){
     free(nameArray);
@@ -798,7 +788,7 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
     return -1;
   }
   for(i = 0; i < dir->numChildren; i++){
-    strcpy(nameArray[i], dir->children[i]->name);
+    strcpy(nameArray[i], offset_to_ptr(h, dir->children[i])->name);
   }
   *namesptr = nameArray;
   return dir->numChildren;
@@ -847,7 +837,7 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
     return -1;
   }
   //If a there is already a node, exit
-  if(find_node(path, (inode*)h->root, 0)){
+  if(find_node(h,path, (inode*)h->root, 0)){
     *errnoptr = EEXIST;
     return -1;
   }
@@ -866,9 +856,9 @@ int __myfs_mknod_implem(void *fsptr, size_t fssize, int *errnoptr,
   for(i = file_index, j = 0; i < strlen(path); i++, j++){
     fileName[j] = path[i];
   }
-  new_file = (inode*)malloc(sizeof(inode));
+  new_file = (inode*)offset_to_ptr(h, malloc_impl(h, (sizeof(inode))));
   *new_file->name = fileName;
-  new_file->parent = parent_node;
+  new_file->parent = ptr_to_offset(h, parent_node);
   new_file->size = (size_t) 0;
   new_file->type = 1;
    //Add new access and modify times for node, set to current time
@@ -913,7 +903,7 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,const char *p
   }
   
   inode* root = (inode*)h->root;
-  inode* node = find_node(path, root, 0);
+  inode* node = find_node(h,path, root, 0);
   inode*parent_node = getParent(h, path);
   if(parent_node == NULL){
     *errnoptr = ENOENT;
@@ -951,8 +941,7 @@ int __myfs_unlink_implem(void *fsptr, size_t fssize, int *errnoptr,const char *p
 int __myfs_rmdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path) {
   handle_t* h;
-  inode *curr, *parent_node;
-  int i;
+  inode *parent_node;
   //Must pass valid path name
   if(path == NULL){
     *errnoptr = ENOENT;
@@ -1018,7 +1007,7 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
     free(parent_node);
     return -1;
   }
-  if(find_node(path, (inode*)h->root, 0)){
+  if(find_node(h, path, (inode*)h->root, 0)){
     *errnoptr = EEXIST;
     free(h);
     free(parent_node);
@@ -1040,10 +1029,11 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
   for(i = dirIndex, j = 0; i < strlen(path); i++, j++){
     dirName[j] = path[i];
   }
-  inode* newDir = (inode*) malloc(sizeof(inode));
+  
+  inode* newDir = (inode*)offset_to_ptr(h, malloc_impl(h, sizeof(inode)));
   *newDir->name = dirName;
   newDir->type = 2;
-  newDir->parent = parent_node;
+  newDir->parent = ptr_to_offset(h, parent_node);
   newDir->size = 0;
   newDir->numChildren = 0;
   time_stamp(newDir, 1);
@@ -1075,8 +1065,35 @@ int __myfs_mkdir_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
                          const char *from, const char *to) {
-  /* STUB */
-  return -1;
+  if (from == NULL || to == NULL) {
+	  // ENOENT if path is empty
+	  *errnoptr = ENOENT;
+	  return -1
+  }
+  handle_t* h = get_handle(fsptr, fssize);
+  
+  if (h == NULL) {
+	  *errnoptr = EFAULT;
+	  return -1;
+  }
+  
+  inode* root = (inode*)h->root;
+  inode* node = find_node(h, from, root, 0);
+  inode*newNode = (inode*)offset_to_ptr(h, malloc_impl(h, sizeof(tree_node)));
+  add_tree_node(newNode, to, h);
+  newNode->type = node->type;
+  newNode->nlinks = node->nlinks;
+  if(newNode->type == 2){
+    newNode->children = node->children;
+    newNode->numChildren = node->numChildren;
+  }
+  else{
+    newNode->size = node->size;
+  }
+  newNode->startOfData = node->startOfData;
+  timestamp(newNode, 1);
+  remove_tree_node(node);
+  return 0;
 }
 
 /* Implements an emulation of the truncate system call on the filesystem 
@@ -1103,7 +1120,7 @@ int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
     *errnoptr = EFAULT;
     return -1;
   }
-  inode *found = find_node(path, (inode*) h->root, 0);
+  inode *found = find_node(h, path, (inode*) h->root, 0);
   //Bad path
   if(found == NULL){
     *errnoptr = ENOENT;
@@ -1176,7 +1193,7 @@ int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
     *errnoptr = EFAULT;
     return -1;
   }
-  inode *found = find_node(path, (inode*) h->root, 0);
+  inode *found = find_node(h, path, (inode*) h->root, 0);
   //Bad path
   if(found == NULL){
     *errnoptr = ENOENT;
@@ -1202,7 +1219,6 @@ int __myfs_open_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
                        const char *path, char *buf, size_t size, off_t offset) {
-  /* STUB */
   if (path == NULL) {
 	  // ENOENT if path is empty
 	  *errnoptr = ENOENT;
@@ -1216,7 +1232,7 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
   }
   
   inode* root = (inode*)h->root;
-  inode* node = find_node(path, root, 0);
+  inode* node = find_node(h, path, root, 0);
   
   if (node == NULL) {
     *errnoptr = ENOENT;
@@ -1227,12 +1243,10 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
 	  *errnoptr = EINVAL;
 	  return -1;
   }
-  
-  //void* cursor = offset_to_ptr(fsptr, (off_t) (node->startOfData+off_t));
-  void* cursor = offset_to_ptr(fsptr, node->startOfData+offset);
-  off_t endOfFile = node->startOfData + size;
+ 
+  void* cursor = offset_to_ptr(h, node->startOfData+offset);
+  off_t endOfFile = node->startOfData + node->size;
   size_t i;
-  //size_t bytesRead = 0;
   char* content = (char*) cursor;
   
   for (i = 0; i < size; i++) {
@@ -1262,8 +1276,39 @@ int __myfs_read_implem(void *fsptr, size_t fssize, int *errnoptr,
 */
 int __myfs_write_implem(void *fsptr, size_t fssize, int *errnoptr,
                         const char *path, const char *buf, size_t size, off_t offset) {
-  /* STUB */
-  return -1;
+  if(path == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  handle_t *h = get_handle(fsptr, fssize);
+  if(h == NULL){
+    *errnoptr = EFAULT;
+    return -1;
+  }
+  inode* node = find_node(h, path, (inode*)h->root, 0);
+  if(node == NULL){
+    *errnoptr = ENOENT;
+    return -1;
+  }
+  if(offset > node->startOfData + node->size){
+    *errnoptr = EINVAL;
+    return -1;
+  }
+  if(offset + node->size < size){
+    node->startOfData = realloc_impl(h, node->startOfData, size);
+  }
+  char*filecontents = (char*)offset_to_ptr(h, node->startOfData+offset);
+  size_t i;
+  off_t endOfFile = node->startOfData + node->size;
+  for(i = 0; i < size; i++){
+    //end of file condition
+    if(offset + i > endOfFile){
+      return 0;
+    }
+    *(filecontents + i) = *(buf + i);
+  }
+  
+  return i;
 }
 
 /* Implements an emulation of the utimensat system call on the filesystem 
@@ -1286,7 +1331,7 @@ int __myfs_utimens_implem(void *fsptr, size_t fssize, int *errnoptr,
     *errnoptr = EFAULT;
     return -1;
   }
-  inode* node = find_node(path, (inode*)h->root, 0);
+  inode* node = find_node(h, path, (inode*)h->root, 0);
   if(node == NULL){
     *errnoptr = ENOENT;
     return -1;
