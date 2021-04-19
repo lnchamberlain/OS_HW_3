@@ -540,9 +540,9 @@ int remove_tree_node(tree_node* node) {
 	return 0;
 } */
 
-int deepCopy(tree_node* source, tree_node* dest) {
+int deepCopy(tree_node* source, tree_node* dest, int setName) {
 	dest->type = source->type;
-	dest->name = source->name;
+	if (setName) dest->name = source->name;
 	// not sure if these need to be assigned
 	/* dest->uid = uid;
 	dest->gid = gid; */
@@ -1104,17 +1104,21 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
 	  return -1;
   }
   
-  //tree_node* root = h->root;
-  //tree_node* node = find_node(from, root, 0);
+  tree_node* root = h->root;
+  tree_node* node = find_node(from, root, 0);
+  tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
+  add_tree_node(newNode, to, h);
+  deepCopy(node, newNode, 0);
+  remove_tree_node(node);
   
-  if (strcmp(from, to) != 0) {
+/*   if (strcmp(from, to) != 0) {
 	  tree_node* root = h->root;
 	  tree_node* node = find_node(from, root, 0);
 	  tree_node *newNode = (tree_node*)malloc(sizeof(tree_node));
 	  add_tree_node(newNode, to, h);
 	  deepCopy(node, newNode);
 	  remove_tree_node(node);
-  }
+  } */
   
   return -1;
 }
