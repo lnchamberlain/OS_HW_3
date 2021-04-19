@@ -488,6 +488,20 @@ static off_t realloc_impl( handle_t* h, off_t prev, size_t size){
   }
   free_impl(h, prev);
 }
+static void merge_blocks_impl(handle_t*h){
+  inode* root = (inode*)h->root;
+  memory_block *curr = (memory_block*)offset_to_ptr(h, h->free);
+  while(curr->next != ((off_t) 0)){
+    if(ptr_to_offset(h, (curr + sizeof(memory_block))) + curr->size == curr->next){
+      memory_block *next = (memory_block*)offset_to_ptr(h, curr->next);
+      curr->size += next->size + (sizeof(memory_block));
+      curr->next = next->next;
+      next = NULL;
+    }
+    curr = (memory_block*) offset_to_ptr(h, curr->next);
+  }
+}
+      
 static void add_block(handle_t* h, memory_block *b){
   memory_block *prev, *curr;
   if(h == NULL){
@@ -508,13 +522,12 @@ static void add_block(handle_t* h, memory_block *b){
   if(prev == NULL){
     b->next = h->free;
     h->free = ptr_to_offset(h, b);
-    /*ADD MERGE BLOCKS HERE*/
-    // merge_blocks_impl(h);
+    merge_blocks_impl(h);
   }
   else{
     b->next =  ptr_to_offset(h, curr);
     prev->next = ptr_to_offset(h, b);
-    //merge_blocks_impl(h);
+    merge_blocks_impl(h);
   }
 }
 static void free_impl( handle_t* h, off_t o){
@@ -564,14 +577,14 @@ inode* find_node(handle_t* h, const char *path, inode *curr, int lastIndex){
   //Search current's children for that slice
   char * child = (char*) malloc(sizeof(char) * MAX_NAME_LENGTH);
   for(i = 0; i < curr->numChildren; i++){
-    child = curr->offset_to_ptr(h,children[i])->name;
+    child = curr->children[i]->name;
     if(strcmp(child, subPath) != 0){
       //Found in children, recurse using new information
       if(curr->type != 2){
 	//if find node or get parent return NULL
 	return NULL;
       }
-      curr = offset_to_ptr(h, curr->children[i]);
+      curr = curr->children[i];
       free(child);
       find_node(h, path, curr, nameLen);
     }
@@ -608,7 +621,7 @@ int add_tree_node(inode* node, const char *path, handle_t* h){
   //Create space for child to be added
   parent_node->children[parent_node->numChildren - 1] = malloc_impl(h,(sizeof(inode)));
   //Make node a child of parent node
-  parent_node->children[parent_node->numChildren -1] = ptr_to_offset(h, node);
+  parent_node->children[parent_node->numChildren -1] =  node;
 
   return 0;
 }
@@ -619,7 +632,6 @@ int remove_tree_node( handle_t* h, const char *path) {
   if(strcmp(path, "/") == 0){
     return -1;
   }
-  inode *root = (inode*)h->root;
   inode *parent_node = getParent(h, path);
   inode *deleted_node = find_node(h, path, (inode*) h->root, 0);
   deleted_node->size = (size_t) 0;
@@ -631,8 +643,8 @@ int remove_tree_node( handle_t* h, const char *path) {
   }
   char * child = (char*) malloc(sizeof(char)*MAX_NAME_LENGTH);
   for(i = 0; i < parent_node->numChildren; i++){
-    child = offset_to_ptr(h, parent_node->children[i])->name;
-    if(strcmp(child, deleted_node->name)){
+    child = parent_node->children[i]->name;
+    if(!strcmp(child, deleted_node->name)){
       nodeIndex = i;
       free(child);
       break;
@@ -640,9 +652,9 @@ int remove_tree_node( handle_t* h, const char *path) {
   }
   //Ensure that the node to be deleted is the last in the array
   if(nodeIndex != parent_node->numChildren - 1){
-						inode *temp = offset_to_ptr(h, parent_node->children[parent_node->numChildren -1]);
-						parent_node->children[parent_node->numChildren -1] = ptr_to_offset(h, deleted_node);
-						parent_node->children[nodeIndex] = ptr_to_offset(h, temp);
+    inode *temp = offset_to_ptr(h, parent_node->children[parent_node->numChildren -1]);
+    parent_node->children[parent_node->numChildren -1] = deleted_node;
+    parent_node->children[nodeIndex] = temp;
   }
   
   parent_node->numChildren -= 1;
@@ -688,9 +700,18 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
     return -1;
   }
   inode * root = (inode*) h->root;
+  inode * found = find_node(h, path, root, 0);
+  inode *parent = getParent(h, path);
   //Account for more errors here
-  
-  inode* found = find_node(h, path, root, 0);
+  if(path[strlen(path - 2)] == '.'){
+      if(path[strlen(path - 3)] == '.'){
+	found = parent;
+      }
+      char subpath[strlen(path - 2)];
+      strcpy(subpath, path);
+      found = find_node(h, subpath, root, 0);
+    }
+ 
   //STUB
   if(found == NULL){
     *errnoptr = EFAULT;
@@ -756,7 +777,7 @@ int __myfs_getattr_implem(void *fsptr, size_t fssize, int *errnoptr,
 int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
                           const char *path, char ***namesptr) {
   inode *dir;
-  int numChildren, i;
+  int i;
   char ** nameArray;
   handle_t* h = get_handle(fsptr, fssize);
   if(h == NULL){
@@ -788,7 +809,7 @@ int __myfs_readdir_implem(void *fsptr, size_t fssize, int *errnoptr,
     return -1;
   }
   for(i = 0; i < dir->numChildren; i++){
-    strcpy(nameArray[i], offset_to_ptr(h, dir->children[i])->name);
+    strcpy(nameArray[i], dir->children[i]->name);
   }
   *namesptr = nameArray;
   return dir->numChildren;
@@ -1068,7 +1089,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
   if (from == NULL || to == NULL) {
 	  // ENOENT if path is empty
 	  *errnoptr = ENOENT;
-	  return -1
+	  return -1;
   }
   handle_t* h = get_handle(fsptr, fssize);
   
@@ -1079,7 +1100,7 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
   
   inode* root = (inode*)h->root;
   inode* node = find_node(h, from, root, 0);
-  inode*newNode = (inode*)offset_to_ptr(h, malloc_impl(h, sizeof(tree_node)));
+  inode*newNode = (inode*)offset_to_ptr(h, malloc_impl(h, sizeof(inode)));
   add_tree_node(newNode, to, h);
   newNode->type = node->type;
   newNode->nlinks = node->nlinks;
@@ -1091,8 +1112,8 @@ int __myfs_rename_implem(void *fsptr, size_t fssize, int *errnoptr,
     newNode->size = node->size;
   }
   newNode->startOfData = node->startOfData;
-  timestamp(newNode, 1);
-  remove_tree_node(node);
+  time_stamp(newNode, 1);
+  remove_tree_node(h, node);
   return 0;
 }
 
@@ -1151,7 +1172,7 @@ int __myfs_truncate_implem(void *fsptr, size_t fssize, int *errnoptr,
       //realloc within fs mem
       found->startOfData = realloc_impl(h, found->startOfData, size_request);
       if(found->size < size_request){
-	memset(offset_to_ptr(fsptr, (found->startOfData + size_request)), "0", sizeof(char));
+	memset(offset_to_ptr(fsptr, (found->startOfData + size_request)), '0', sizeof(char));
       }
     }
   }
